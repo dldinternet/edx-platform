@@ -16,8 +16,7 @@ from textwrap import dedent
 from uuid import uuid4
 
 from django.conf import settings
-from django.contrib.auth.models import User, Group
-from django.dispatch import Signal
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.test.utils import override_settings
 
@@ -51,7 +50,7 @@ from django_comment_common.utils import are_permissions_roles_seeded
 
 from student import auth
 from student.models import CourseEnrollment
-from student.roles import CourseCreatorRole, CourseInstructorRole, GlobalStaff
+from student.roles import CourseCreatorRole, CourseInstructorRole
 from opaque_keys import InvalidKeyError
 
 
