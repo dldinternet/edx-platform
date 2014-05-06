@@ -73,10 +73,9 @@ class CourseKeyField(models.CharField):
 
     def get_prep_value(self, value):
         if value is self.Empty or value is None:
-            return ''
+            return ''  # CharFields should use '' as their empty value, rather than None
 
         assert isinstance(value, SlashSeparatedCourseKey)
-        # CharFields should use '' as their empty value, rather than None
         return value.to_deprecated_string()
 
     def validate(self, value, model_instance):
