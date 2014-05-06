@@ -241,7 +241,7 @@ class LocationBase(object):
     def course_key(self):
         return SlashSeparatedCourseKey(self.org, self.course, self.run)
 
-    def to_son(self, prefix='', tag='i4x'):
+    def to_deprecated_son(self, prefix='', tag='i4x'):
         """
         Returns a SON object that represents this location
         """

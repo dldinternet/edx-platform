@@ -59,7 +59,7 @@ class StaticContent(object):
         )
 
     def get_id(self):
-        return self.location.to_son(tag=XASSET_LOCATION_TAG)
+        return self.location.to_deprecated_son(tag=XASSET_LOCATION_TAG)
 
     def get_url_path(self):
         return self.location.to_deprecated_string()

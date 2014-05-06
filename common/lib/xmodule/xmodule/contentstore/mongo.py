@@ -278,4 +278,4 @@ class MongoContentStore(ContentStore):
         """
         Returns the database query to find the given asset location.
         """
-        return location.to_son(tag=XASSET_LOCATION_TAG, prefix='_id.')
+        return location.to_deprecated_son(tag=XASSET_LOCATION_TAG, prefix='_id.')

@@ -10,7 +10,7 @@ class Content:
         self.content = content
 
     def get_id(self):
-        return self.location.to_son()
+        return self.location.to_deprecated_son()
 
 
 class CachingTestCase(TestCase):

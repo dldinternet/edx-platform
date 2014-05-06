@@ -136,7 +136,7 @@ class DraftModuleStore(MongoModuleStore):
             raise InvalidVersionError(source_location)
         if not original:
             raise ItemNotFoundError(source_location)
-        original['_id'] = draft_location.to_son()
+        original['_id'] = draft_location.to_deprecated_son()
         try:
             self.collection.insert(original)
         except pymongo.errors.DuplicateKeyError:
@@ -223,7 +223,7 @@ class DraftModuleStore(MongoModuleStore):
         # now query all draft content in another round-trip
         query = {
             '_id': {'$in': [
-                as_draft(course_key.make_usage_key_from_deprecated_string(item)).to_son() for item in items
+                as_draft(course_key.make_usage_key_from_deprecated_string(item)).to_deprecated_son() for item in items
             ]}
         }
         to_process_drafts = list(self.collection.find(query))
