@@ -103,7 +103,7 @@ def get_lms_link_for_about_page(course_id):
 
         # Root will be "https://www.edx.org". The complete URL will still not be exactly correct,
         # but redirects exist from www.edx.org to get to the Drupal course about page URL.
-        about_base = marketing_urls.get('ROOT')
+        about_base = marketing_urls.get('ROOT', None)
 
         if about_base is None:
             log.exception('There is no ROOT defined in MKTG_URLS')
