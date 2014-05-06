@@ -1232,10 +1232,6 @@ class ContentStoreTest(ModuleStoreTestCase):
         MongoClient().drop_database(TEST_DATA_CONTENTSTORE['DOC_STORE_CONFIG']['db'])
         _CONTENTSTORE.clear()
 
-    def test_create_course(self):
-        """Test new course creation - happy path"""
-        self.assert_created_course()
-
     def assert_created_course(self, number_suffix=None):
         """
         Checks that the course was created properly.
@@ -1258,6 +1254,17 @@ class ContentStoreTest(ModuleStoreTestCase):
         self.assertEqual(resp.status_code, 400)
         data = parse_json(resp)
         self.assertEqual(data['error'], error_message)
+
+    def test_create_course(self):
+        """Test new course creation - happy path"""
+        self.assert_created_course()
+
+    def test_create_course_with_dots(self):
+        """Test new course creation with dots in the name"""
+        self.course_data['org'] = 'org.foo.bar'
+        self.course_data['number'] = 'course.number'
+        self.course_data['run'] = 'run.name'
+        self.assert_created_course()
 
     def test_create_course_check_forum_seeding(self):
         """Test new course creation and verify forum seeding """
