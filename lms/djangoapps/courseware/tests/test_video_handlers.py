@@ -744,17 +744,17 @@ class TestVideoGradeHandler(TestVideo):
         self.assertEqual(response.status, '400 Bad Request')
 
         test_grader_name = 'scored_on_end'
-        self.assertFalse(self.item.cumulative_score[test_grader_name][0])
+        self.assertFalse(self.item.cumulative_score[test_grader_name]['grader_status'])
         request = Request.blank('', POST={'grader_name': test_grader_name})
         response = self.item.grade_handler(request=request, dispatch='')
-        self.assertTrue(self.item.cumulative_score[test_grader_name][0])
+        self.assertTrue(self.item.cumulative_score[test_grader_name]['grader_status'])
         self.assertEqual(response.status_code, 200)
 
         test_grader_name = 'scored_on_percent'
-        self.assertFalse(self.item.cumulative_score[test_grader_name][0])
+        self.assertFalse(self.item.cumulative_score[test_grader_name]['grader_status'])
         request = Request.blank('', POST={'grader_name': test_grader_name})
         response = self.item.grade_handler(request=request, dispatch='')
-        self.assertTrue(self.item.cumulative_score[test_grader_name][0])
+        self.assertTrue(self.item.cumulative_score[test_grader_name]['grader_status'])
         self.assertEqual(response.status_code, 501)  # NotImplemented
 
         # TODO mock: same as in test_video_scoring and get 200 status_code

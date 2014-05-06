@@ -49,8 +49,8 @@ class VideoScoring(object):
         clear self.cumulative_score and clear score in database.
 
         Returns:
-            dumped dict of { grader field name: (score_status, grader value)} format,
-            where score_status is bool, and True if condition for that grader was
+            dumped dict of {grader_name: {grader_status: boolean, score: 1}} format,
+            where grader_status is bool, and True if condition for that grader was
             satisfied.
         """
 
@@ -67,15 +67,14 @@ class VideoScoring(object):
         graders_values_changed = False
 
         if not graders_updated:
-            for grader_name, cumulative_score_value in self.cumulative_score.items():
-                score_status, grader_value = cumulative_score_value
-                if grader_value != active_graders[grader_name]:
+            for grader_name, grader_dict in self.cumulative_score.items():
+                if grader_dict['score'] != active_graders[grader_name]:
                     graders_values_changed = True
                     break
 
         if graders_updated or graders_values_changed:
             self.cumulative_score = {
-                grader_name: (False, grader_value)
+                grader_name: {'grader_status': False, 'score': grader_value}
                 for grader_name, grader_value in active_graders.items()
             }
 

@@ -273,9 +273,9 @@ class VideoStudentViewHandlers(object):
         if not grader_name or grader_name not in self.graders():
             return Response(status=400)
 
-        self.cumulative_score[grader_name] = (True, self.cumulative_score[grader_name][1])
+        self.cumulative_score[grader_name]['grader_status'] = True
 
-        if not all([status for status, params in self.cumulative_score.values()]):
+        if not all([grader_dict['grader_status'] for grader, grader_dict in self.cumulative_score.items()]):
             return Response(status=200)
 
         if not(self.module_score and self.module_score == self.weight * self.max_score()):
