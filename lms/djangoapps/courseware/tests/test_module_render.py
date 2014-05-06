@@ -116,7 +116,8 @@ class ModuleRenderTestCase(ModuleStoreTestCase, LoginEnrollmentTestCase):
             get_fake_module.return_value = self.mock_module
             # call xqueue_callback with our mocked information
             request = self.request_factory.post(self.callback_url, data)
-            render.xqueue_callback(request, self.course_id, self.mock_user.id, self.mock_module.id, self.dispatch)
+            response = render.xqueue_callback(request, self.course_id, self.mock_user.id, self.mock_module.id, self.dispatch)
+            self.assertEqual(response.status_code, 200)
 
         # Verify that handle ajax is called with the correct data
         request.POST['queuekey'] = fake_key
@@ -139,6 +140,25 @@ class ModuleRenderTestCase(ModuleStoreTestCase, LoginEnrollmentTestCase):
             with self.assertRaises(Http404):
                 request = self.request_factory.post(self.callback_url, data)
                 render.xqueue_callback(request, self.course_id, self.mock_user.id, self.mock_module.id, self.dispatch)
+
+    def test_xqueue_callback_save_error(self):
+        """
+        Test xqueue_callback when module.handle_ajax() or module.save() raises an exception.
+        """
+        fake_key = 'fake key'
+        xqueue_header = json.dumps({'lms_key': fake_key})
+        data = {
+            'xqueue_header': xqueue_header,
+            'xqueue_body': 'hello world',
+        }
+
+        with patch('courseware.module_render.find_target_student_module') as get_fake_module:
+            self.mock_module.save = MagicMock(side_effect=Exception)
+            get_fake_module.return_value = self.mock_module
+            # call xqueue_callback with our mocked information
+            request = self.request_factory.post(self.callback_url, data)
+            response = render.xqueue_callback(request, self.course_id, self.mock_user.id, self.mock_module.id, self.dispatch)
+            self.assertEqual(response.status_code, 500)
 
     def test_get_score_bucket(self):
         self.assertEquals(render.get_score_bucket(0, 10), 'incorrect')
