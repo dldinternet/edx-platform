@@ -47,17 +47,17 @@ class ContentStoreToyCourseTest(ModuleStoreTestCase):
         self.client = Client()
         self.contentstore = contentstore()
 
-        self.course_id = SlashSeparatedCourseKey('edX', 'toy', '2012_Fall')
+        self.course_key = SlashSeparatedCourseKey('edX', 'toy', '2012_Fall')
 
         import_from_xml(modulestore('direct'), 'common/test/data/', ['toy'],
                 static_content_store=self.contentstore, verbose=True)
 
         # A locked asset
-        self.locked_asset = self.course_id.make_asset_key('asset', 'sample_static.txt')
+        self.locked_asset = self.course_key.make_asset_key('asset', 'sample_static.txt')
         self.url_locked = self.locked_asset.to_deprecated_string()
 
         # An unlocked asset
-        self.unlocked_asset = self.course_id.make_asset_key('asset', 'another_static.txt')
+        self.unlocked_asset = self.course_key.make_asset_key('asset', 'another_static.txt')
         self.url_unlocked = self.unlocked_asset.to_deprecated_string()
 
         self.contentstore.set_attr(self.locked_asset, 'locked', True)
@@ -116,8 +116,8 @@ class ContentStoreToyCourseTest(ModuleStoreTestCase):
         Test that locked assets behave appropriately in case user is logged in
         and registered for the course.
         """
-        CourseEnrollment.enroll(self.user, self.course_id)
-        self.assertTrue(CourseEnrollment.is_enrolled(self.user, self.course_id))
+        CourseEnrollment.enroll(self.user, self.course_key)
+        self.assertTrue(CourseEnrollment.is_enrolled(self.user, self.course_key))
 
         self.client.login(username=self.usr, password=self.pwd)
         resp = self.client.get(self.url_locked)

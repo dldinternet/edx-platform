@@ -194,22 +194,22 @@ class TestCohorts(django.test.TestCase):
             self.assertLess(num_users, 50)
 
     def test_get_course_cohorts(self):
-        course1_id = SlashSeparatedCourseKey('a', 'b', 'c')
-        course2_id = SlashSeparatedCourseKey('e', 'f', 'g')
+        course1_key = SlashSeparatedCourseKey('a', 'b', 'c')
+        course2_key = SlashSeparatedCourseKey('e', 'f', 'g')
 
         # add some cohorts to course 1
         cohort = CourseUserGroup.objects.create(name="TestCohort",
-                                                course_id=course1_id,
+                                                course_id=course1_key,
                                                 group_type=CourseUserGroup.COHORT)
 
         cohort = CourseUserGroup.objects.create(name="TestCohort2",
-                                                course_id=course1_id,
+                                                course_id=course1_key,
                                                 group_type=CourseUserGroup.COHORT)
 
         # second course should have no cohorts
-        self.assertEqual(get_course_cohorts(course2_id), [])
+        self.assertEqual(get_course_cohorts(course2_key), [])
 
-        cohorts = sorted([c.name for c in get_course_cohorts(course1_id)])
+        cohorts = sorted([c.name for c in get_course_cohorts(course1_key)])
         self.assertEqual(cohorts, ['TestCohort', 'TestCohort2'])
 
     def test_is_commentable_cohorted(self):
