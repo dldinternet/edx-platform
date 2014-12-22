@@ -1,8 +1,8 @@
 ############################
-Contributing to edx-platform
+Contributing to Open edX
 ############################
 
-Contributions to edx-platform are very welcome, and strongly encouraged! We've
+Contributions to Open edX are very welcome, and strongly encouraged! We've
 put together `some documentation that describes our contribution process`_,
 but here's a step-by-step guide that should help you get started.
 
@@ -13,9 +13,30 @@ Step 0: Join the Conversation
 
 Got an idea for how to improve the codebase? Fantastic, we'd love to hear about
 it! Before you dive in and spend a lot of time and effort making a pull request,
-it's a good idea to discuss your idea with other interested developers. You may
-get some valuable feedback that changes how you think about your idea, or you
-may find other developers who have the same idea and want to work together.
+it's a good idea to discuss your idea with other interested developers and/or the 
+edX product team. You may get some valuable feedback that changes how you think
+about your idea, or you may find other developers who have the same idea and want
+to work together.
+
+If you've got an idea for a new feature or new functionality for an existing feature,
+please start a discussion on the `edx-code`_ mailing list to get feedback from
+the community about the idea and your implementation choices.
+
+.. _edx-code: https://groups.google.com/forum/#!forum/edx-code
+
+If you then plan to contribute your code upstream, please `start a discussion on JIRA`_
+(you may first need to `create a free JIRA account`_).
+Start a discussion by visiting the JIRA website and clicking the "Create" button at the
+top of the page. Choose the project "Open Source Pull Requests" and the issue type
+"Feature Proposal". In the description give us as much detail as you can for the feature
+or functionality you are thinking about implementing. Include a link to any relevant
+edx-code mailing list discussions about your idea. We encourage you to do this before
+you begin implementing your feature, in order to get valuable feedback from the edX
+product team early on in your journey and increase the likelihood of a successful
+pull request.
+
+.. _start a discussion on JIRA: https://openedx.atlassian.net/secure/Dashboard.jspa
+.. _create a free JIRA account: https://openedx.atlassian.net/admin/users/sign-up
 
 For real-time conversation, we use `IRC`_: we all hang out in the
 `#edx-code channel on Freenode`_. Come join us! The channel tends to be most
@@ -33,12 +54,32 @@ For asynchronous conversation, we have several mailing lists on Google Groups:
 * `openedx-translation`_: everything related to *translating* Open edX into
   other languages. This includes volunteer translators, our internationalization
   infrastructure, issues related to Transifex, and so on.
+* `openedx-analytics`_: everything related to *analytics* in Open edX.
 * `edx-code`_: everything related to the *code* in Open edX. This includes
   feature requests, idea proposals, refactorings, and so on.
 
 .. _openedx-ops: https://groups.google.com/forum/#!forum/openedx-ops
 .. _openedx-translation: https://groups.google.com/forum/#!forum/openedx-translation
+.. _openedx-analytics: https://groups.google.com/forum/#!forum/openedx-analytics
 .. _edx-code: https://groups.google.com/forum/#!forum/edx-code
+
+Byte-sized Tasks & Bugs
+-----------------------
+
+If you are contributing for the first time and want a gentle introduction, 
+or if you aren't sure what to work on, have a look at the list of
+`byte-sized bugs and tasks`_ in the tracker. These tasks are selected for their
+small size, and usually don't require a broad knowledge of the edX platform.
+It makes them good candidates for a first task, allowing you to focus on getting
+familiar with the development environment and the contribution process.
+
+.. _byte-sized bugs and tasks: https://openedx.atlassian.net/issues/?jql=labels%3Dbyte-sized%20and%20status%3D%22In%20Backlog%22
+
+Once you have identified a bug or task, `create an account on the tracker`_ and
+then comment on the ticket to indicate that you are working on it. Don't hesitate
+to ask clarifying questions on the ticket as needed, too, if anything is unclear.
+
+.. _create an account on the tracker: https://openedx.atlassian.net/admin/users/sign-up
 
 Step 1: Sign a Contribution Agreement
 =====================================
@@ -101,13 +142,18 @@ If your pull request meets the requirements listed in the
 then it will be scheduled for code review by one or more core committers. This
 process sometimes takes awhile: currently, all core committers on the project
 are employees of edX, and they have to balance their time between code review
-and new development.
+and new development. Please also read our `code ownership page`_, which
+lists areas and concepts in the codebase that are "owned" by certain developers.
+If your change touches one of these areas or concepts, that developer should be
+one of the reviewers.
 
 Once the code review process has started, please be responsive to comments on
 the pull request, so we can keep the review process moving forward.
 If you are unable to respond for a few days, that's fine, but
 please add a comment informing us of that -- otherwise, it looks like you're
 abandoning your work!
+
+.. _code ownership page: https://github.com/edx/edx-platform/wiki/Code-Ownership
 
 Step 6: Merge!
 ==============
@@ -117,9 +163,9 @@ one of them will merge it for you. Your code will end up on the edX production
 servers in the next release, which usually which happens every week. Congrats!
 
 
-===========================
+############################
 Expectations We Have of You
-===========================
+############################
 
 By opening up a pull request, we expect the following things:
 
@@ -137,9 +183,9 @@ By opening up a pull request, we expect the following things:
 4. If you do not respond to comments on your pull request within 7 days, we
    will close it. You are welcome to re-open it when you are ready to engage.
 
-=========================
+############################
 Expections You Have of Us
-=========================
+############################
 
 1. Within a week of opening up a pull request, one of our community managers
    will triage it, starting the documented contribution process. (Please

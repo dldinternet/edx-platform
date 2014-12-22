@@ -8,7 +8,7 @@ from xmodule.modulestore.tests.factories import CourseFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 
 from django.test.utils import override_settings
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 from student.roles import CourseBetaTesterRole, CourseStaffRole
 
 from django_comment_common.models import (Role,
@@ -19,7 +19,7 @@ from instructor.access import (allow_access,
                                update_forum_role)
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestInstructorAccessList(ModuleStoreTestCase):
     """ Test access listings. """
     def setUp(self):
@@ -41,7 +41,7 @@ class TestInstructorAccessList(ModuleStoreTestCase):
         self.assertEqual(set(beta_testers), set(self.beta_testers))
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestInstructorAccessAllow(ModuleStoreTestCase):
     """ Test access allow. """
     def setUp(self):
@@ -50,19 +50,19 @@ class TestInstructorAccessAllow(ModuleStoreTestCase):
     def test_allow(self):
         user = UserFactory()
         allow_access(self.course, user, 'staff')
-        self.assertTrue(CourseStaffRole(self.course.location).has_user(user))
+        self.assertTrue(CourseStaffRole(self.course.id).has_user(user))
 
     def test_allow_twice(self):
         user = UserFactory()
         allow_access(self.course, user, 'staff')
         allow_access(self.course, user, 'staff')
-        self.assertTrue(CourseStaffRole(self.course.location).has_user(user))
+        self.assertTrue(CourseStaffRole(self.course.id).has_user(user))
 
     def test_allow_beta(self):
         """ Test allow beta against list beta. """
         user = UserFactory()
         allow_access(self.course, user, 'beta')
-        self.assertTrue(CourseBetaTesterRole(self.course.location).has_user(user))
+        self.assertTrue(CourseBetaTesterRole(self.course.id).has_user(user))
 
     @raises(ValueError)
     def test_allow_badlevel(self):
@@ -75,7 +75,7 @@ class TestInstructorAccessAllow(ModuleStoreTestCase):
         allow_access(self.course, user, 'staff')
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestInstructorAccessRevoke(ModuleStoreTestCase):
     """ Test access revoke. """
     def setUp(self):
@@ -91,17 +91,17 @@ class TestInstructorAccessRevoke(ModuleStoreTestCase):
     def test_revoke(self):
         user = self.staff[0]
         revoke_access(self.course, user, 'staff')
-        self.assertFalse(CourseStaffRole(self.course.location).has_user(user))
+        self.assertFalse(CourseStaffRole(self.course.id).has_user(user))
 
     def test_revoke_twice(self):
         user = self.staff[0]
         revoke_access(self.course, user, 'staff')
-        self.assertFalse(CourseStaffRole(self.course.location).has_user(user))
+        self.assertFalse(CourseStaffRole(self.course.id).has_user(user))
 
     def test_revoke_beta(self):
         user = self.beta_testers[0]
         revoke_access(self.course, user, 'beta')
-        self.assertFalse(CourseBetaTesterRole(self.course.location).has_user(user))
+        self.assertFalse(CourseBetaTesterRole(self.course.id).has_user(user))
 
     @raises(ValueError)
     def test_revoke_badrolename(self):
@@ -109,7 +109,7 @@ class TestInstructorAccessRevoke(ModuleStoreTestCase):
         revoke_access(self.course, user, 'robot-not-a-level')
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestInstructorAccessForum(ModuleStoreTestCase):
     """
     Test forum access control.

@@ -8,10 +8,13 @@ import textwrap
 import json
 from datetime import timedelta
 from webob import Request
+from mock import MagicMock, Mock
 
 from xmodule.contentstore.content import StaticContent
-from xmodule.modulestore import Location
 from xmodule.contentstore.django import contentstore
+from xmodule.modulestore.django import modulestore
+from xmodule.modulestore import ModuleStoreEnum
+from xmodule.x_module import STUDENT_VIEW
 from . import BaseTestXmodule
 from .test_video_xml import SOURCE_XML
 from cache_toolbox.core import del_cached_content
@@ -46,7 +49,7 @@ def _check_asset(location, asset_name):
     Check that asset with asset_name exists in assets.
     """
     content_location = StaticContent.compute_location(
-        location.org, location.course, asset_name
+        location.course_key, asset_name
     )
     try:
         contentstore().find(content_location)
@@ -55,22 +58,18 @@ def _check_asset(location, asset_name):
     else:
         return True
 
+
 def _clear_assets(location):
     """
     Clear all assets for location.
     """
     store = contentstore()
 
-    content_location = StaticContent.compute_location(
-        location.org, location.course, location.name
-    )
-
-    assets, __ = store.get_all_content_for_course(content_location)
+    assets, __ = store.get_all_content_for_course(location.course_key)
     for asset in assets:
-        asset_location = Location(asset["_id"])
+        asset_location = asset['asset_key']
         del_cached_content(asset_location)
-        id = StaticContent.get_id_from_location(asset_location)
-        store.delete(id)
+        store.delete(asset_location)
 
 
 def _get_subs_id(filename):
@@ -97,7 +96,7 @@ def _upload_sjson_file(subs_file, location, default_filename='subs_{}.srt.sjson'
 def _upload_file(subs_file, location, filename):
     mime_type = subs_file.content_type
     content_location = StaticContent.compute_location(
-        location.org, location.course, filename
+        location.course_key, filename
     )
     content = StaticContent(content_location, filename, mime_type, subs_file.read())
     contentstore().save(content)
@@ -119,12 +118,8 @@ class TestVideo(BaseTestXmodule):
             for user in self.users
         }
 
-        self.assertEqual(
-            set([
-                response.status_code
-                for _, response in responses.items()
-                ]).pop(),
-            404)
+        status_codes = {response.status_code for response in responses.values()}
+        self.assertEqual(status_codes.pop(), 404)
 
     def test_handle_ajax(self):
 
@@ -132,6 +127,7 @@ class TestVideo(BaseTestXmodule):
             {'speed': 2.0},
             {'saved_video_position': "00:00:10"},
             {'transcript_language': 'uk'},
+            {'demoo�': 'sample'}
         ]
         for sample in data:
             response = self.clients[self.users[0].username].post(
@@ -153,8 +149,12 @@ class TestVideo(BaseTestXmodule):
         self.item_descriptor.handle_ajax('save_user_state', {'transcript_language': "uk"})
         self.assertEqual(self.item_descriptor.transcript_language, 'uk')
 
+        response = self.item_descriptor.handle_ajax('save_user_state', {u'demoo�': "sample"})
+        self.assertEqual(json.loads(response)['success'], True)
+
     def tearDown(self):
         _clear_assets(self.item_descriptor.location)
+
 
 class TestTranscriptAvailableTranslationsDispatch(TestVideo):
     """
@@ -179,7 +179,7 @@ class TestTranscriptAvailableTranslationsDispatch(TestVideo):
 
     def setUp(self):
         super(TestTranscriptAvailableTranslationsDispatch, self).setUp()
-        self.item_descriptor.render('student_view')
+        self.item_descriptor.render(STUDENT_VIEW)
         self.item = self.item_descriptor.xmodule_runtime.xmodule_instance
         self.subs = {"start": [10], "end": [100], "text": ["Hi, welcome to Edx."]}
 
@@ -225,6 +225,7 @@ class TestTranscriptDownloadDispatch(TestVideo):
     DATA = """
         <video show_captions="true"
         display_name="A Name"
+        sub='OEoXaMPEzfM'
         >
             <source src="example.mp4"/>
             <source src="example.webm"/>
@@ -237,7 +238,7 @@ class TestTranscriptDownloadDispatch(TestVideo):
 
     def setUp(self):
         super(TestTranscriptDownloadDispatch, self).setUp()
-        self.item_descriptor.render('student_view')
+        self.item_descriptor.render(STUDENT_VIEW)
         self.item = self.item_descriptor.xmodule_runtime.xmodule_instance
 
     def test_download_transcript_not_exist(self):
@@ -302,7 +303,7 @@ class TestTranscriptTranslationGetDispatch(TestVideo):
 
     def setUp(self):
         super(TestTranscriptTranslationGetDispatch, self).setUp()
-        self.item_descriptor.render('student_view')
+        self.item_descriptor.render(STUDENT_VIEW)
         self.item = self.item_descriptor.xmodule_runtime.xmodule_instance
 
     def test_translation_fails(self):
@@ -337,8 +338,9 @@ class TestTranscriptTranslationGetDispatch(TestVideo):
             u'end': [100],
             u'start': [12],
             u'text': [
-            u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
-        ]}
+                u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
+            ]
+        }
         self.non_en_file.seek(0)
         _upload_file(self.non_en_file, self.item_descriptor.location, os.path.split(self.non_en_file.name)[1])
         subs_id = _get_subs_id(self.non_en_file.name)
@@ -357,7 +359,7 @@ class TestTranscriptTranslationGetDispatch(TestVideo):
             u'end': [75],
             u'start': [9],
             u'text': [
-            u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
+                u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
             ]
         }
         self.assertDictEqual(json.loads(response.body), calculated_0_75)
@@ -369,7 +371,7 @@ class TestTranscriptTranslationGetDispatch(TestVideo):
             u'end': [150],
             u'start': [18],
             u'text': [
-            u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
+                u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
             ]
         }
         self.assertDictEqual(json.loads(response.body), calculated_1_5)
@@ -390,7 +392,7 @@ class TestTranscriptTranslationGetDispatch(TestVideo):
             u'end': [100],
             u'start': [12],
             u'text': [
-            u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
+                u'\u041f\u0440\u0438\u0432\u0456\u0442, edX \u0432\u0456\u0442\u0430\u0454 \u0432\u0430\u0441.'
             ]
         }
         self.non_en_file.seek(0)
@@ -401,6 +403,80 @@ class TestTranscriptTranslationGetDispatch(TestVideo):
         request = Request.blank('/translation/uk')
         response = self.item.transcript(request=request, dispatch='translation/uk')
         self.assertDictEqual(json.loads(response.body), subs)
+
+    def test_translation_static_transcript_xml_with_data_dirc(self):
+        """
+        Test id data_dir is set in XML course.
+
+        Set course data_dir and ensure we get redirected to that path
+        if it isn't found in the contentstore.
+        """
+        # Simulate data_dir set in course.
+        test_modulestore = MagicMock()
+        attrs = {'get_course.return_value': Mock(data_dir='dummy/static', static_asset_path='')}
+        test_modulestore.configure_mock(**attrs)
+        self.item_descriptor.runtime.modulestore = test_modulestore
+
+        # Test youtube style en
+        request = Request.blank('/translation/en?videoId=12345')
+        response = self.item.transcript(request=request, dispatch='translation/en')
+        self.assertEqual(response.status, '307 Temporary Redirect')
+        self.assertIn(
+            ('Location', '/static/dummy/static/subs_12345.srt.sjson'),
+            response.headerlist
+        )
+
+        # Test HTML5 video style
+        self.item.sub = 'OEoXaMPEzfM'
+        request = Request.blank('/translation/en')
+        response = self.item.transcript(request=request, dispatch='translation/en')
+        self.assertEqual(response.status, '307 Temporary Redirect')
+        self.assertIn(
+            ('Location', '/static/dummy/static/subs_OEoXaMPEzfM.srt.sjson'),
+            response.headerlist
+        )
+
+        # Test different language to ensure we are just ignoring it since we can't
+        # translate with static fallback
+        request = Request.blank('/translation/uk')
+        response = self.item.transcript(request=request, dispatch='translation/uk')
+        self.assertEqual(response.status, '404 Not Found')
+
+    def test_translation_static_transcript(self):
+        """
+        Set course static_asset_path and ensure we get redirected to that path
+        if it isn't found in the contentstore
+        """
+        self.course.static_asset_path = 'dummy/static'
+        self.course.save()
+        store = modulestore()
+        with store.branch_setting(ModuleStoreEnum.Branch.draft_preferred, self.course.id):
+            store.update_item(self.course, self.user.id)
+
+        # Test youtube style en
+        request = Request.blank('/translation/en?videoId=12345')
+        response = self.item.transcript(request=request, dispatch='translation/en')
+        self.assertEqual(response.status, '307 Temporary Redirect')
+        self.assertIn(
+            ('Location', '/static/dummy/static/subs_12345.srt.sjson'),
+            response.headerlist
+        )
+
+        # Test HTML5 video style
+        self.item.sub = 'OEoXaMPEzfM'
+        request = Request.blank('/translation/en')
+        response = self.item.transcript(request=request, dispatch='translation/en')
+        self.assertEqual(response.status, '307 Temporary Redirect')
+        self.assertIn(
+            ('Location', '/static/dummy/static/subs_OEoXaMPEzfM.srt.sjson'),
+            response.headerlist
+        )
+
+        # Test different language to ensure we are just ignoring it since we can't
+        # translate with static fallback
+        request = Request.blank('/translation/uk')
+        response = self.item.transcript(request=request, dispatch='translation/uk')
+        self.assertEqual(response.status, '404 Not Found')
 
 
 class TestStudioTranscriptTranslationGetDispatch(TestVideo):
@@ -501,13 +577,15 @@ class TestStudioTranscriptTranslationPostDispatch(TestVideo):
             response = self.item_descriptor.studio_transcript(request=request, dispatch='translation/uk')
 
         request = Request.blank('/translation/uk', POST={'file': ('filename.srt', SRT_content.decode('utf8').encode('cp1251'))})
-        with self.assertRaises(UnicodeDecodeError):  # Non-UTF8 file content encoding.
-            response = self.item_descriptor.studio_transcript(request=request, dispatch='translation/uk')
+        # Non-UTF8 file content encoding.
+        response = self.item_descriptor.studio_transcript(request=request, dispatch='translation/uk')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.body, "Invalid encoding type, transcripts should be UTF-8 encoded.")
 
         # No language is passed.
         request = Request.blank('/translation', POST={'file': ('filename', SRT_content)})
         response = self.item_descriptor.studio_transcript(request=request, dispatch='translation')
-        self.assertEqual(response.status,  '400 Bad Request')
+        self.assertEqual(response.status, '400 Bad Request')
 
         # Language, good filename and good content.
         request = Request.blank('/translation/uk', POST={'file': ('filename.srt', SRT_content)})
@@ -541,7 +619,7 @@ class TestGetTranscript(TestVideo):
 
     def setUp(self):
         super(TestGetTranscript, self).setUp()
-        self.item_descriptor.render('student_view')
+        self.item_descriptor.render(STUDENT_VIEW)
         self.item = self.item_descriptor.xmodule_runtime.xmodule_instance
 
     def test_good_transcript(self):

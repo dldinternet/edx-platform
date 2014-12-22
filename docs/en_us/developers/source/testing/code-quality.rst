@@ -18,7 +18,10 @@ in the process of introducing other changes.
 To check the quality of your pull request, just go to the top level of the
 edx-platform codebase and run::
 
-    $ rake quality
+    $ paver run_quality
+
+You can also use the `paver run_pep8`` and ``paver run_pylint`` commands to run just pep8 or
+pylint.
 
 This will print a report of the quality violations that your branch has made.
 

@@ -13,6 +13,7 @@ div.video {
   margin: 0 -12px;
   padding: 12px;
   border-radius: 5px;
+  outline: none;
 
   &:focus, &:active, &:hover {
     border: 0;
@@ -178,6 +179,7 @@ div.video {
         line-height: 46px;
         margin: 0;
         padding: 0 0 0 15px;
+        overflow: hidden;
         text-indent: -9999px;
         -webkit-font-smoothing: antialiased;
         box-shadow: 1px 0 0 #555, inset 1px 0 0 #555;
@@ -458,14 +460,14 @@ div.video {
           float: left;
           position: relative;
 
-          &.open {
+          &.is-opened {
             .volume-slider-container {
               display: block;
               opacity: 1;
             }
           }
 
-          &.muted {
+          &.is-muted {
             & > a {
               background-image: url('../images/mute.png');
             }
@@ -688,8 +690,9 @@ div.video {
     position: fixed;
     top: 0;
     width: 100%;
-    z-index: 999;
+    z-index: 9999;
     vertical-align: middle;
+    border-radius: 0;
 
     &.closed {
       div.tc-wrapper {

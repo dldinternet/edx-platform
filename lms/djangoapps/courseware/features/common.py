@@ -1,5 +1,5 @@
-# pylint: disable=C0111
-# pylint: disable=W0621
+# pylint: disable=missing-docstring
+# pylint: disable=redefined-outer-name
 
 from __future__ import absolute_import
 
@@ -10,12 +10,10 @@ from lettuce.django import django_url
 from django.contrib.auth.models import User
 from django.core.urlresolvers import reverse
 from student.models import CourseEnrollment
-from xmodule.modulestore import Location
 from xmodule.modulestore.django import modulestore
 from xmodule.course_module import CourseDescriptor
 from courseware.courses import get_course_by_id
 from xmodule import seq_module, vertical_module
-
 from logging import getLogger
 logger = getLogger(__name__)
 
@@ -27,13 +25,14 @@ def configure_screenshots_for_all_steps(_step, action):
     automatic saving of screenshots before and after each step in a
     scenario.
     """
-    action=action.strip()
+    action = action.strip()
     if action == 'enable':
         world.auto_capture_screenshots = True
     elif action == 'disable':
         world.auto_capture_screenshots = False
     else:
         raise ValueError('Parameter `action` should be one of "enable" or "disable".')
+
 
 @world.absorb
 def capture_screenshot_before_after(func):
@@ -43,12 +42,12 @@ def capture_screenshot_before_after(func):
     for each step in a scenario, but rather want to debug a single function.
     """
     def inner(*args, **kwargs):
-        prefix=round(time.time() * 1000)
+        prefix = round(time.time() * 1000)
 
         world.capture_screenshot("{}_{}_{}".format(
             prefix, func.func_name, 'before'
         ))
-        ret_val=func(*args, **kwargs)
+        ret_val = func(*args, **kwargs)
         world.capture_screenshot("{}_{}_{}".format(
             prefix, func.func_name, 'after'
         ))
@@ -78,12 +77,14 @@ def create_course(_step, course):
         parent_location=world.scenario_dict['COURSE'].location,
         category='chapter',
         display_name='Test Chapter',
+        publish_item=True,  # Not needed for direct-only but I'd rather the test didn't know that
     )
 
     world.scenario_dict['SECTION'] = world.ItemFactory.create(
         parent_location=world.scenario_dict['CHAPTER'].location,
         category='sequential',
         display_name='Test Section',
+        publish_item=True,
     )
 
 
@@ -94,11 +95,11 @@ def i_am_registered_for_the_course(step, course):
 
     # Create the user
     world.create_user('robot', 'test')
-    u = User.objects.get(username='robot')
+    user = User.objects.get(username='robot')
 
     # If the user is not already enrolled, enroll the user.
     # TODO: change to factory
-    CourseEnrollment.enroll(u, course_id(course))
+    CourseEnrollment.enroll(user, course_id(course))
 
     world.log_in(username='robot', password='test')
 
@@ -118,17 +119,18 @@ def go_into_course(step):
     step.given('And I click on View Courseware')
 
 
+# Do we really use these 3 w/ a different course than is in the scenario_dict? if so, why? If not,
+# then get rid of the override arg
 def course_id(course_num):
-    return "%s/%s/%s" % (world.scenario_dict['COURSE'].org, course_num,
-                         world.scenario_dict['COURSE'].url_name)
+    return world.scenario_dict['COURSE'].id.replace(course=course_num)
 
 
 def course_location(course_num):
-    return world.scenario_dict['COURSE'].location._replace(course=course_num)
+    return world.scenario_dict['COURSE'].location.replace(course=course_num)
 
 
 def section_location(course_num):
-    return world.scenario_dict['SECTION'].location._replace(course=course_num)
+    return world.scenario_dict['SECTION'].location.replace(course=course_num)
 
 
 def visit_scenario_item(item_key):
@@ -140,8 +142,8 @@ def visit_scenario_item(item_key):
     url = django_url(reverse(
         'jump_to',
         kwargs={
-            'course_id': world.scenario_dict['COURSE'].id,
-            'location': str(world.scenario_dict[item_key].location),
+            'course_id': unicode(world.scenario_dict['COURSE'].id),
+            'location': unicode(world.scenario_dict[item_key].location),
         }
     ))
 
@@ -154,8 +156,8 @@ def get_courses():
     Courses are sorted by course.number.
     '''
     courses = [c for c in modulestore().get_courses()
-               if isinstance(c, CourseDescriptor)]
-    courses = sorted(courses, key=lambda course: course.number)
+               if isinstance(c, CourseDescriptor)]  # skip error descriptors
+    courses = sorted(courses, key=lambda course: course.location.course)
     return courses
 
 
@@ -220,13 +222,16 @@ def get_courseware_with_tabs(course_id):
 
     course = get_course_by_id(course_id)
     chapters = [chapter for chapter in course.get_children() if not chapter.hide_from_toc]
-    courseware = [{'chapter_name': c.display_name_with_default,
-                   'sections': [{'section_name': s.display_name_with_default,
-                                'clickable_tab_count': len(s.get_children()) if (type(s) == seq_module.SequenceDescriptor) else 0,
-                                'tabs': [{'children_count': len(t.get_children()) if (type(t) == vertical_module.VerticalDescriptor) else 0,
-                                         'class': t.__class__.__name__}
-                                         for t in s.get_children()]}
-                                for s in c.get_children() if not s.hide_from_toc]}
-                  for c in chapters]
+    courseware = [{
+        'chapter_name': c.display_name_with_default,
+        'sections': [{
+            'section_name': s.display_name_with_default,
+            'clickable_tab_count': len(s.get_children()) if (type(s) == seq_module.SequenceDescriptor) else 0,
+            'tabs': [{
+                'children_count': len(t.get_children()) if (type(t) == vertical_module.VerticalDescriptor) else 0,
+                'class': t.__class__.__name__} for t in s.get_children()
+            ]
+        } for s in c.get_children() if not s.hide_from_toc]
+    } for c in chapters]
 
     return courseware

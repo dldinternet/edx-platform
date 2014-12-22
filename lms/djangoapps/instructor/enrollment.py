@@ -14,15 +14,10 @@ from student.models import CourseEnrollment, CourseEnrollmentAllowed
 from courseware.models import StudentModule
 from edxmako.shortcuts import render_to_string
 
-# Submissions is a Django app that is currently installed
-# from the edx-ora2 repo, although it will likely move in the future.
-from submissions import api as sub_api
+from submissions import api as sub_api  # installed from the edx-submissions repository
 from student.models import anonymous_id_for_user
 
 from microsite_configuration import microsite
-
-# For determining if a shibboleth course
-SHIBBOLETH_DOMAIN_PREFIX = 'shib:'
 
 
 class EmailEnrollmentState(object):
@@ -31,13 +26,16 @@ class EmailEnrollmentState(object):
         exists_user = User.objects.filter(email=email).exists()
         if exists_user:
             user = User.objects.get(email=email)
-            exists_ce = CourseEnrollment.is_enrolled(user, course_id)
+            mode, is_active = CourseEnrollment.enrollment_mode_for_user(user, course_id)
+            # is_active is `None` if the user is not enrolled in the course
+            exists_ce = is_active is not None and is_active
             full_name = user.profile.name
         else:
+            mode = None
             exists_ce = False
             full_name = None
         ceas = CourseEnrollmentAllowed.objects.filter(course_id=course_id, email=email).all()
-        exists_allowed = len(ceas) > 0
+        exists_allowed = ceas.exists()
         state_auto_enroll = exists_allowed and ceas[0].auto_enroll
 
         self.user = exists_user
@@ -45,6 +43,7 @@ class EmailEnrollmentState(object):
         self.allowed = exists_allowed
         self.auto_enroll = bool(state_auto_enroll)
         self.full_name = full_name
+        self.mode = mode
 
     def __repr__(self):
         return "{}(user={}, enrollment={}, allowed={}, auto_enroll={})".format(
@@ -86,11 +85,16 @@ def enroll_email(course_id, student_email, auto_enroll=False, email_students=Fal
     returns two EmailEnrollmentState's
         representing state before and after the action.
     """
-
     previous_state = EmailEnrollmentState(course_id, student_email)
 
     if previous_state.user:
-        CourseEnrollment.enroll_by_email(student_email, course_id)
+        # if the student is currently unenrolled, don't enroll them in their
+        # previous mode
+        course_mode = u"honor"
+        if previous_state.enrollment:
+            course_mode = previous_state.mode
+
+        CourseEnrollment.enroll_by_email(student_email, course_id, course_mode)
         if email_students:
             email_params['message'] = 'enrolled_enroll'
             email_params['email_address'] = student_email
@@ -121,7 +125,6 @@ def unenroll_email(course_id, student_email, email_students=False, email_params=
     returns two EmailEnrollmentState's
         representing state before and after the action.
     """
-
     previous_state = EmailEnrollmentState(course_id, student_email)
 
     if previous_state.enrollment:
@@ -193,8 +196,8 @@ def reset_student_attempts(course_id, student, module_state_key, delete_module=F
     if delete_module:
         sub_api.reset_score(
             anonymous_id_for_user(student, course_id),
-            course_id,
-            module_state_key,
+            course_id.to_deprecated_string(),
+            module_state_key.to_deprecated_string(),
         )
 
     module_to_reset = StudentModule.objects.get(
@@ -225,7 +228,7 @@ def _reset_module_attempts(studentmodule):
     studentmodule.save()
 
 
-def get_email_params(course, auto_enroll):
+def get_email_params(course, auto_enroll, secure=True):
     """
     Generate parameters used when parsing email templates.
 
@@ -233,25 +236,32 @@ def get_email_params(course, auto_enroll):
     Returns a dict of parameters
     """
 
+    protocol = 'https' if secure else 'http'
+
     stripped_site_name = microsite.get_value(
         'SITE_NAME',
         settings.SITE_NAME
     )
-    registration_url = u'https://{}{}'.format(
-        stripped_site_name,
-        reverse('student.views.register_user')
+    # TODO: Use request.build_absolute_uri rather than '{proto}://{site}{path}'.format
+    # and check with the Services team that this works well with microsites
+    registration_url = u'{proto}://{site}{path}'.format(
+        proto=protocol,
+        site=stripped_site_name,
+        path=reverse('student.views.register_user')
     )
-    course_url = u'https://{}{}'.format(
-        stripped_site_name,
-        reverse('course_root', kwargs={'course_id': course.id})
+    course_url = u'{proto}://{site}{path}'.format(
+        proto=protocol,
+        site=stripped_site_name,
+        path=reverse('course_root', kwargs={'course_id': course.id.to_deprecated_string()})
     )
 
     # We can't get the url to the course's About page if the marketing site is enabled.
     course_about_url = None
     if not settings.FEATURES.get('ENABLE_MKTG_SITE', False):
-        course_about_url = u'https://{}{}'.format(
-            stripped_site_name,
-            reverse('about_course', kwargs={'course_id': course.id})
+        course_about_url = u'{proto}://{site}{path}'.format(
+            proto=protocol,
+            site=stripped_site_name,
+            path=reverse('about_course', kwargs={'course_id': course.id.to_deprecated_string()})
         )
 
     is_shib_course = uses_shib(course)
@@ -331,6 +341,10 @@ def send_mail_to_student(student, param_dict):
             'emails/remove_beta_tester_email_subject.txt',
             'emails/remove_beta_tester_email_message.txt'
         ),
+        'account_creation_and_enrollment': (
+            'emails/enroll_email_enrolledsubject.txt',
+            'emails/account_creation_and_enroll_emailMessage.txt'
+        ),
     }
 
     subject_template, message_template = email_template_dict.get(message_type, (None, None))
@@ -358,4 +372,4 @@ def uses_shib(course):
 
     Returns a boolean indicating if Shibboleth authentication is set for this course.
     """
-    return course.enrollment_domain and course.enrollment_domain.startswith(SHIBBOLETH_DOMAIN_PREFIX)
+    return course.enrollment_domain and course.enrollment_domain.startswith(settings.SHIBBOLETH_DOMAIN_PREFIX)

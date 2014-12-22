@@ -2,7 +2,11 @@
 Specific overrides to the base prod settings to make development easier.
 """
 
-from .aws import * # pylint: disable=wildcard-import, unused-wildcard-import
+from .aws import *  # pylint: disable=wildcard-import, unused-wildcard-import
+
+# Don't use S3 in devstack, fall back to filesystem
+del DEFAULT_FILE_STORAGE
+MEDIA_ROOT = "/edx/var/edxapp/uploads"
 
 DEBUG = True
 USE_I18N = True
@@ -36,6 +40,10 @@ FEATURES['ALLOW_ALL_ADVANCED_COMPONENTS'] = True
 # By default don't use a worker, execute tasks as if they were local functions
 CELERY_ALWAYS_EAGER = True
 
+################################ COURSE RERUNS ################################
+
+FEATURES['ALLOW_COURSE_RERUNS'] = True
+
 ################################ DEBUG TOOLBAR ################################
 INSTALLED_APPS += ('debug_toolbar', 'debug_toolbar_mongo')
 MIDDLEWARE_CLASSES += ('debug_toolbar.middleware.DebugToolbarMiddleware',)
@@ -59,7 +67,8 @@ DEBUG_TOOLBAR_PANELS = (
 )
 
 DEBUG_TOOLBAR_CONFIG = {
-    'INTERCEPT_REDIRECTS': False
+    'INTERCEPT_REDIRECTS': False,
+    'SHOW_TOOLBAR_CALLBACK': lambda _: True,
 }
 
 # To see stacktraces for MongoDB queries, set this to True.
@@ -67,8 +76,12 @@ DEBUG_TOOLBAR_CONFIG = {
 DEBUG_TOOLBAR_MONGO_STACKTRACES = False
 
 ###############################################################################
-# Lastly, see if the developer has any local overrides.
+# See if the developer has any local overrides.
 try:
-    from .private import *  # pylint: disable=F0401
+    from .private import *  # pylint: disable=import-error
 except ImportError:
     pass
+
+#####################################################################
+# Lastly, run any migrations, if needed.
+MODULESTORE = convert_module_store_setting_if_needed(MODULESTORE)

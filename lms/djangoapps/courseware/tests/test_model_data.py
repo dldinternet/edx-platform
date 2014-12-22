@@ -7,19 +7,19 @@ from functools import partial
 
 from courseware.model_data import DjangoKeyValueStore
 from courseware.model_data import InvalidScopeError, FieldDataCache
-from courseware.models import StudentModule, XModuleUserStateSummaryField
+from courseware.models import StudentModule
 from courseware.models import XModuleStudentInfoField, XModuleStudentPrefsField
 
 from student.tests.factories import UserFactory
-from courseware.tests.factories import StudentModuleFactory as cmfStudentModuleFactory
+from courseware.tests.factories import StudentModuleFactory as cmfStudentModuleFactory, location, course_id
 from courseware.tests.factories import UserStateSummaryFactory
 from courseware.tests.factories import StudentPrefsFactory, StudentInfoFactory
 
 from xblock.fields import Scope, BlockScope, ScopeIds
-from xmodule.modulestore import Location
+from xblock.exceptions import KeyValueMultiSaveError
+from xblock.core import XBlock
 from django.test import TestCase
 from django.db import DatabaseError
-from xblock.core import KeyValueMultiSaveError
 
 
 def mock_field(scope, name):
@@ -30,15 +30,12 @@ def mock_field(scope, name):
 
 
 def mock_descriptor(fields=[]):
-    descriptor = Mock()
+    descriptor = Mock(entry_point=XBlock.entry_point)
     descriptor.scope_ids = ScopeIds('user1', 'mock_problem', location('def_id'), location('usage_id'))
     descriptor.module_class.fields.values.return_value = fields
     descriptor.fields.values.return_value = fields
     descriptor.module_class.__name__ = 'MockProblemModule'
     return descriptor
-
-location = partial(Location, 'i4x', 'edX', 'test_course', 'problem')
-course_id = 'edX/test_course/test'
 
 # The user ids here are 1 because we make a student in the setUp functions, and
 # they get an id of 1.  There's an assertion in setUp to ensure that assumption
@@ -51,7 +48,7 @@ user_info_key = partial(DjangoKeyValueStore.Key, Scope.user_info, 1, None)
 
 
 class StudentModuleFactory(cmfStudentModuleFactory):
-    module_state_key = location('usage_id').url()
+    module_state_key = location('usage_id')
     course_id = course_id
 
 
@@ -204,7 +201,7 @@ class TestMissingStudentModule(TestCase):
         student_module = StudentModule.objects.all()[0]
         self.assertEquals({'a_field': 'a_value'}, json.loads(student_module.state))
         self.assertEquals(self.user, student_module.student)
-        self.assertEquals(location('usage_id').url(), student_module.module_state_key)
+        self.assertEquals(location('usage_id').replace(run=None), student_module.module_state_key)
         self.assertEquals(course_id, student_module.course_id)
 
     def test_delete_field_from_missing_student_module(self):
@@ -223,7 +220,7 @@ class StorageTestBase(object):
     """
     # Disable pylint warnings that arise because of the way the child classes call
     # this base class -- pylint's static analysis can't keep up with it.
-    # pylint: disable=E1101, E1102
+    # pylint: disable=no-member, not-callable
 
     factory = None
     scope = None
@@ -241,7 +238,6 @@ class StorageTestBase(object):
             mock_field(self.scope, 'other_existing_field')])
         self.field_data_cache = FieldDataCache([self.mock_descriptor], course_id, self.user)
         self.kvs = DjangoKeyValueStore(self.field_data_cache)
-
 
     def test_set_and_get_existing_field(self):
         self.kvs.set(self.key_factory('existing_field'), 'test_value')
@@ -317,12 +313,12 @@ class StorageTestBase(object):
         self.assertEquals(exception.saved_field_names[0], 'existing_field')
 
 
-class TestContentStorage(StorageTestBase, TestCase):
-    """Tests for ContentStorage"""
+class TestUserStateSummaryStorage(StorageTestBase, TestCase):
+    """Tests for UserStateSummaryStorage"""
     factory = UserStateSummaryFactory
     scope = Scope.user_state_summary
     key_factory = user_state_summary_key
-    storage_class = XModuleUserStateSummaryField
+    storage_class = factory.FACTORY_FOR
 
 
 class TestStudentPrefsStorage(OtherUserFailureTestMixin, StorageTestBase, TestCase):

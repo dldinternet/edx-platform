@@ -19,19 +19,19 @@ from xmodule.contentstore.django import contentstore
 log = logging.getLogger(__name__)
 
 
-class TranscriptException(Exception):  # pylint disable=C0111
+class TranscriptException(Exception):  # pylint: disable=missing-docstring
     pass
 
 
-class TranscriptsGenerationException(Exception):  # pylint disable=C0111
+class TranscriptsGenerationException(Exception):  # pylint: disable=missing-docstring
     pass
 
 
-class GetTranscriptsFromYouTubeException(Exception):  # pylint disable=C0111
+class GetTranscriptsFromYouTubeException(Exception):  # pylint: disable=missing-docstring
     pass
 
 
-class TranscriptsRequestValidationException(Exception):  # pylint disable=C0111
+class TranscriptsRequestValidationException(Exception):  # pylint: disable=missing-docstring
     pass
 
 
@@ -75,6 +75,7 @@ def save_to_store(content, name, mime_type, location):
     contentstore().save(content)
     return content_location
 
+
 def save_subs_to_store(subs, subs_id, item, language='en'):
     """
     Save transcripts into `StaticContent`.
@@ -89,6 +90,7 @@ def save_subs_to_store(subs, subs_id, item, language='en'):
     filedata = json.dumps(subs, indent=2)
     filename = subs_filename(subs_id, language)
     return save_to_store(filedata, filename, 'application/json', item.location)
+
 
 def get_transcripts_from_youtube(youtube_id, settings, i18n):
     """
@@ -132,67 +134,29 @@ def get_transcripts_from_youtube(youtube_id, settings, i18n):
     return {'start': sub_starts, 'end': sub_ends, 'text': sub_texts}
 
 
-def download_youtube_subs(youtube_subs, item, settings):
+def download_youtube_subs(youtube_id, video_descriptor, settings):
     """
     Download transcripts from Youtube and save them to assets.
 
     Args:
-    youtube_subs: dictionary of `speed: youtube_id` key:value pairs.
-    item: video module instance.
+        youtube_id: str, actual youtube_id of the video.
+        video_descriptor: video descriptor instance.
 
-    Returns: None, if transcripts were successfully downloaded and saved.
-    Otherwise raises GetTranscriptsFromYouTubeException.
+    We save transcripts for 1.0 speed, as for other speed conversion is done on front-end.
+
+    Returns:
+        None, if transcripts were successfully downloaded and saved.
+
+    Raises:
+        GetTranscriptsFromYouTubeException, if fails.
     """
-    i18n = item.runtime.service(item, "i18n")
+    i18n = video_descriptor.runtime.service(video_descriptor, "i18n")
     _ = i18n.ugettext
 
-    highest_speed = highest_speed_subs = None
-    missed_speeds = []
-    # Iterate from lowest to highest speed and try to do download transcripts
-    # from the Youtube service.
-    for speed, youtube_id in sorted(youtube_subs.iteritems()):
-        if not youtube_id:
-            continue
-        try:
-            subs = get_transcripts_from_youtube(youtube_id, settings, i18n)
-            if not subs:  # if empty subs are returned
-                raise GetTranscriptsFromYouTubeException
-        except GetTranscriptsFromYouTubeException:
-            missed_speeds.append(speed)
-            continue
+    subs = get_transcripts_from_youtube(youtube_id, settings, i18n)
+    save_subs_to_store(subs, youtube_id, video_descriptor)
 
-        save_subs_to_store(subs, youtube_id, item)
-
-        log.info(
-            "Transcripts for YouTube id %s (speed %s)"
-            "are downloaded and saved.", youtube_id, speed
-        )
-
-        highest_speed = speed
-        highest_speed_subs = subs
-
-    if not highest_speed:
-        raise GetTranscriptsFromYouTubeException(_("Can't find any transcripts on the Youtube service."))
-
-    # When we exit from the previous loop, `highest_speed` and `highest_speed_subs`
-    # are the transcripts data for the highest speed available on the
-    # Youtube service. We use the highest speed as main speed for the
-    # generation other transcripts, cause during calculation timestamps
-    # for lower speeds we just use multiplication instead of division.
-    for speed in missed_speeds:  # Generate transcripts for missed speeds.
-        save_subs_to_store(
-            generate_subs(speed, highest_speed, highest_speed_subs),
-            youtube_subs[speed],
-            item
-        )
-
-        log.info(
-            "Transcripts for YouTube id %s (speed %s)"
-            "are generated from YouTube id %s (speed %s) and saved",
-            youtube_subs[speed], speed,
-            youtube_subs[highest_speed],
-            highest_speed
-        )
+    log.info("Transcripts for youtube_id %s for 1.0 speed are downloaded and saved.", youtube_id)
 
 
 def remove_subs_from_store(subs_id, item, lang='en'):
@@ -289,9 +253,7 @@ def copy_or_rename_transcript(new_name, old_name, item, delete_old=False, user=N
     If `delete_old` is True, removes `old_name` files from storage.
     """
     filename = 'subs_{0}.srt.sjson'.format(old_name)
-    content_location = StaticContent.compute_location(
-        item.location.org, item.location.course, filename
-    )
+    content_location = StaticContent.compute_location(item.location.course_key, filename)
     transcripts = contentstore().find(content_location).data
     save_subs_to_store(json.loads(transcripts), new_name, item)
     item.sub = new_name
@@ -468,6 +430,7 @@ def get_or_create_sjson(item):
     sjson_transcript = Transcript.asset(item.location, source_subs_id, item.transcript_language).data
     return sjson_transcript
 
+
 class Transcript(object):
     """
     Container for transcript methods.
@@ -532,7 +495,7 @@ class Transcript(object):
         """
         Return asset location. `location` is module location.
         """
-        return StaticContent.compute_location(location.org, location.course, filename)
+        return StaticContent.compute_location(location.course_key, filename)
 
     @staticmethod
     def delete_asset(location, filename):
@@ -540,9 +503,109 @@ class Transcript(object):
         Delete asset by location and filename.
         """
         try:
-            content = Transcript.get_asset(location, filename)
-            contentstore().delete(content.get_id())
+            contentstore().delete(Transcript.asset_location(location, filename))
             log.info("Transcript asset %s was removed from store.", filename)
         except NotFoundError:
             pass
+        return StaticContent.compute_location(location.course_key, filename)
 
+
+class VideoTranscriptsMixin(object):
+    """Mixin class for transcript functionality.
+
+    This is necessary for both VideoModule and VideoDescriptor.
+    """
+
+    def available_translations(self, verify_assets=True):
+        """Return a list of language codes for which we have transcripts.
+
+        Args:
+            verify_assets (boolean): If True, checks to ensure that the transcripts
+                really exist in the contentstore. If False, we just look at the
+                VideoDescriptor fields and do not query the contentstore. One reason
+                we might do this is to avoid slamming contentstore() with queries
+                when trying to make a listing of videos and their languages.
+
+                Defaults to True.
+        """
+        translations = []
+
+        # If we're not verifying the assets, we just trust our field values
+        if not verify_assets:
+            translations = list(self.transcripts)
+            if not translations or self.sub:
+                translations += ['en']
+            return set(translations)
+
+        # If we've gotten this far, we're going to verify that the transcripts
+        # being referenced are actually in the contentstore.
+        if self.sub:  # check if sjson exists for 'en'.
+            try:
+                Transcript.asset(self.location, self.sub, 'en')
+            except NotFoundError:
+                pass
+            else:
+                translations = ['en']
+
+        for lang in self.transcripts:
+            try:
+                Transcript.asset(self.location, None, None, self.transcripts[lang])
+            except NotFoundError:
+                continue
+            translations.append(lang)
+
+        return translations
+
+    def get_transcript(self, transcript_format='srt', lang=None):
+        """
+        Returns transcript, filename and MIME type.
+
+        Raises:
+            - NotFoundError if cannot find transcript file in storage.
+            - ValueError if transcript file is empty or incorrect JSON.
+            - KeyError if transcript file has incorrect format.
+
+        If language is 'en', self.sub should be correct subtitles name.
+        If language is 'en', but if self.sub is not defined, this means that we
+        should search for video name in order to get proper transcript (old style courses).
+        If language is not 'en', give back transcript in proper language and format.
+        """
+        if not lang:
+            lang = self.transcript_language
+
+        if lang == 'en':
+            if self.sub:  # HTML5 case and (Youtube case for new style videos)
+                transcript_name = self.sub
+            elif self.youtube_id_1_0:  # old courses
+                transcript_name = self.youtube_id_1_0
+            else:
+                log.debug("No subtitles for 'en' language")
+                raise ValueError
+
+            data = Transcript.asset(self.location, transcript_name, lang).data
+            filename = u'{}.{}'.format(transcript_name, transcript_format)
+            content = Transcript.convert(data, 'sjson', transcript_format)
+        else:
+            data = Transcript.asset(self.location, None, None, self.transcripts[lang]).data
+            filename = u'{}.{}'.format(os.path.splitext(self.transcripts[lang])[0], transcript_format)
+            content = Transcript.convert(data, 'srt', transcript_format)
+
+        if not content:
+            log.debug('no subtitles produced in get_transcript')
+            raise ValueError
+
+        return content, filename, Transcript.mime_types[transcript_format]
+
+    def get_default_transcript_language(self):
+        """
+        Returns the default transcript language for this video module.
+        """
+        if self.transcript_language in self.transcripts:
+            transcript_language = self.transcript_language
+        elif self.sub:
+            transcript_language = u'en'
+        elif len(self.transcripts) > 0:
+            transcript_language = sorted(self.transcripts)[0]
+        else:
+            transcript_language = u'en'
+        return transcript_language

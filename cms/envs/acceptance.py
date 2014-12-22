@@ -5,7 +5,7 @@ so that we can run the lettuce acceptance tests.
 
 # We intentionally define lots of variables that aren't used, and
 # want to import all variables from base settings files
-# pylint: disable=W0401, W0614
+# pylint: disable=wildcard-import, unused-wildcard-import
 
 from .test import *
 from lms.envs.sauce import *
@@ -18,51 +18,41 @@ DEBUG = True
 import logging
 logging.basicConfig(filename=TEST_ROOT / "log" / "cms_acceptance.log", level=logging.ERROR)
 
+# set root logger level
+logging.getLogger().setLevel(logging.ERROR)
+
 import os
 
 
 def seed():
     return os.getppid()
 
-# Suppress error message "Cannot determine primary key of logged in user"
-# from track.middleware that gets triggered when using an auto_auth workflow
-# This is an ERROR level warning so we need to set the threshold at CRITICAL
-logging.getLogger('track.middleware').setLevel(logging.CRITICAL)
+# Silence noisy logs
+LOG_OVERRIDES = [
+    ('track.middleware', logging.CRITICAL),
+    ('codejail.safe_exec', logging.ERROR),
+    ('edx.courseware', logging.ERROR),
+    ('edxmako.shortcuts', logging.ERROR),
+    ('audit', logging.ERROR),
+    ('contentstore.views.import_export', logging.CRITICAL),
+    ('xmodule.x_module', logging.CRITICAL),
+]
 
-# Suppress warning message "Cannot find corresponding link for name: <foo>"
-# from edxmako.shortcuts. We have no appropriate pages in the platform to
-# use, so these are not set up for TOS and PRIVACY
-logging.getLogger('edxmako.shortcuts').setLevel(logging.ERROR)
+for log_name, log_level in LOG_OVERRIDES:
+    logging.getLogger(log_name).setLevel(log_level)
 
-DOC_STORE_CONFIG = {
-    'host': 'localhost',
-    'db': 'acceptance_xmodule',
-    'collection': 'acceptance_modulestore_%s' % seed(),
-}
-
-MODULESTORE_OPTIONS = {
-    'default_class': 'xmodule.raw_module.RawDescriptor',
-    'fs_root': TEST_ROOT / "data",
-    'render_template': 'edxmako.shortcuts.render_to_string',
-}
-
-MODULESTORE = {
-    'default': {
-        'ENGINE': 'xmodule.modulestore.draft.DraftModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
+update_module_store_settings(
+    MODULESTORE,
+    doc_store_settings={
+        'db': 'acceptance_xmodule',
+        'collection': 'acceptance_modulestore_%s' % seed(),
     },
-    'direct': {
-        'ENGINE': 'xmodule.modulestore.mongo.MongoModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
+    module_store_options={
+        'default_class': 'xmodule.raw_module.RawDescriptor',
+        'fs_root': TEST_ROOT / "data",
     },
-    'draft': {
-        'ENGINE': 'xmodule.modulestore.draft.DraftModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
-    }
-}
+    default_store=os.environ.get('DEFAULT_STORE', 'draft'),
+)
 
 CONTENTSTORE = {
     'ENGINE': 'xmodule.contentstore.mongo.MongoContentStore',
@@ -78,22 +68,19 @@ CONTENTSTORE = {
     }
 }
 
-# Set this up so that rake lms[acceptance] and running the
+# Set this up so that 'paver cms --settings=acceptance' and running the
 # harvest command both use the same (test) database
 # which they can flush without messing up your dev db
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': TEST_ROOT / "db" / "test_edx.db",
-        'TEST_NAME': TEST_ROOT / "db" / "test_edx.db"
+        'TEST_NAME': TEST_ROOT / "db" / "test_edx.db",
+        'OPTIONS': {
+            'timeout': 30,
+        },
     }
 }
-
-# Enable asset pipeline
-# Our fork of django-pipeline uses `PIPELINE` instead of `PIPELINE_ENABLED`
-# PipelineFinder is explained here: http://django-pipeline.readthedocs.org/en/1.1.24/storages.html
-PIPELINE = True
-STATICFILES_FINDERS += ('pipeline.finders.PipelineFinder', )
 
 # Use the auto_auth workflow for creating users and logging them in
 FEATURES['AUTOMATIC_AUTH_FOR_TESTING'] = True
@@ -126,7 +113,7 @@ SELENIUM_GRID = {
 #####################################################################
 # Lastly, see if the developer has any local overrides.
 try:
-    from .private import *  # pylint: disable=F0401
+    from .private import *  # pylint: disable=import-error
 except ImportError:
     pass
 

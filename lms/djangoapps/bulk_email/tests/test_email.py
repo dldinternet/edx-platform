@@ -2,6 +2,7 @@
 """
 Unit tests for sending course email
 """
+import json
 from mock import patch
 
 from django.conf import settings
@@ -10,14 +11,15 @@ from django.core.urlresolvers import reverse
 from django.core.management import call_command
 from django.test.utils import override_settings
 
-from courseware.tests.tests import TEST_DATA_MONGO_MODULESTORE
-from student.tests.factories import CourseEnrollmentFactory, UserFactory
+from bulk_email.models import Optout
 from courseware.tests.factories import StaffFactory, InstructorFactory
-
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
+from instructor_task.subtasks import update_subtask_status
+from student.roles import CourseStaffRole
+from student.models import CourseEnrollment
+from student.tests.factories import CourseEnrollmentFactory, UserFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
-from bulk_email.models import Optout
-from instructor_task.subtasks import update_subtask_status
 
 STAFF_COUNT = 3
 STUDENT_COUNT = 10
@@ -33,14 +35,14 @@ class MockCourseEmailResult(object):
 
     def get_mock_update_subtask_status(self):
         """Wrapper for mock email function."""
-        def mock_update_subtask_status(entry_id, current_task_id, new_subtask_status):  # pylint: disable=W0613
+        def mock_update_subtask_status(entry_id, current_task_id, new_subtask_status):  # pylint: disable=unused-argument
             """Increments count of number of emails sent."""
             self.emails_sent += new_subtask_status.succeeded
             return update_subtask_status(entry_id, current_task_id, new_subtask_status)
         return mock_update_subtask_status
 
 
-@override_settings(MODULESTORE=TEST_DATA_MONGO_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 @patch.dict(settings.FEATURES, {'ENABLE_INSTRUCTOR_EMAIL': True, 'REQUIRE_COURSE_EMAIL_AUTH': False})
 class TestEmailSendFromDashboard(ModuleStoreTestCase):
     """
@@ -52,10 +54,10 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         course_title = u"ẗëṡẗ title ｲ乇丂ｲ ﾶ乇丂丂ﾑg乇 ｷo尺 ﾑﾚﾚ тэѕт мэѕѕаБэ"
         self.course = CourseFactory.create(display_name=course_title)
 
-        self.instructor = InstructorFactory(course=self.course.location)
+        self.instructor = InstructorFactory(course_key=self.course.id)
 
         # Create staff
-        self.staff = [StaffFactory(course=self.course.location)
+        self.staff = [StaffFactory(course_key=self.course.id)
                       for _ in xrange(STAFF_COUNT)]
 
         # Create students
@@ -69,19 +71,18 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         self.client.login(username=self.instructor.username, password="test")
 
         # Pull up email view on instructor dashboard
-        self.url = reverse('instructor_dashboard', kwargs={'course_id': self.course.id})
+        self.url = reverse('instructor_dashboard', kwargs={'course_id': self.course.id.to_deprecated_string()})
+        # Response loads the whole instructor dashboard, so no need to explicitly
+        # navigate to a particular email section
         response = self.client.get(self.url)
-        email_link = '<a href="#" onclick="goto(\'Email\')" class="None">Email</a>'
+        email_section = '<div class="vert-left send-email" id="section-send-email">'
         # If this fails, it is likely because ENABLE_INSTRUCTOR_EMAIL is set to False
-        self.assertTrue(email_link in response.content)
-
-        # Select the Email view of the instructor dash
-        session = self.client.session
-        session[u'idash_mode:{0}'.format(self.course.location.course_id)] = 'Email'
-        session.save()
-        response = self.client.get(self.url)
-        selected_email_link = '<a href="#" onclick="goto(\'Email\')" class="selectedmode">Email</a>'
-        self.assertTrue(selected_email_link in response.content)
+        self.assertTrue(email_section in response.content)
+        self.send_mail_url = reverse('send_email', kwargs={'course_id': self.course.id.to_deprecated_string()})
+        self.success_content = {
+            'course_id': self.course.id.to_deprecated_string(),
+            'success': True,
+        }
 
     def tearDown(self):
         """
@@ -96,12 +97,13 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         """
         test_email = {
             'action': 'Send email',
-            'to_option': 'myself',
+            'send_to': 'myself',
             'subject': 'test subject for myself',
             'message': 'test message for myself'
         }
-        response = self.client.post(self.url, test_email)
-        self.assertContains(response, "Email is not enabled for this course.")
+        response = self.client.post(self.send_mail_url, test_email)
+        # We should get back a HttpResponseForbidden (status code 403)
+        self.assertContains(response, "Email is not enabled for this course.", status_code=403)
 
     def test_send_to_self(self):
         """
@@ -110,15 +112,16 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         # Now we know we have pulled up the instructor dash's email view
         # (in the setUp method), we can test sending an email.
         test_email = {
-            'action': 'Send email',
-            'to_option': 'myself',
+            'action': 'send',
+            'send_to': 'myself',
             'subject': 'test subject for myself',
             'message': 'test message for myself'
         }
-        response = self.client.post(self.url, test_email)
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
 
-        self.assertContains(response, "Your email was successfully queued for sending.")
-
+        # Check that outbox is as expected
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(len(mail.outbox[0].to), 1)
         self.assertEquals(mail.outbox[0].to[0], self.instructor.email)
@@ -135,13 +138,13 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         # (in the setUp method), we can test sending an email.
         test_email = {
             'action': 'Send email',
-            'to_option': 'staff',
+            'send_to': 'staff',
             'subject': 'test subject for staff',
             'message': 'test message for subject'
         }
-        response = self.client.post(self.url, test_email)
-
-        self.assertContains(response, "Your email was successfully queued for sending.")
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
 
         # the 1 is for the instructor in this test and others
         self.assertEquals(len(mail.outbox), 1 + len(self.staff))
@@ -159,19 +162,35 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
 
         test_email = {
             'action': 'Send email',
-            'to_option': 'all',
+            'send_to': 'all',
             'subject': 'test subject for all',
             'message': 'test message for all'
         }
-        response = self.client.post(self.url, test_email)
-
-        self.assertContains(response, "Your email was successfully queued for sending.")
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
 
         self.assertEquals(len(mail.outbox), 1 + len(self.staff) + len(self.students))
         self.assertItemsEqual(
             [e.to[0] for e in mail.outbox],
             [self.instructor.email] + [s.email for s in self.staff] + [s.email for s in self.students]
         )
+
+    def test_no_duplicate_emails_staff_instructor(self):
+        """
+        Test that no duplicate emails are sent to a course instructor that is
+        also course staff
+        """
+        CourseStaffRole(self.course.id).add_users(self.instructor)
+        self.test_send_to_all()
+
+    def test_no_duplicate_emails_enrolled_staff(self):
+        """
+        Test that no duplicate emials are sent to a course instructor that is
+        also enrolled in the course
+        """
+        CourseEnrollment.enroll(self.instructor, self.course.id)
+        self.test_send_to_all()
 
     def test_unicode_subject_send_to_all(self):
         """
@@ -183,13 +202,13 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         uni_subject = u'téśt śúbjéćt főŕ áĺĺ'
         test_email = {
             'action': 'Send email',
-            'to_option': 'all',
+            'send_to': 'all',
             'subject': uni_subject,
             'message': 'test message for all'
         }
-        response = self.client.post(self.url, test_email)
-
-        self.assertContains(response, "Your email was successfully queued for sending.")
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
 
         self.assertEquals(len(mail.outbox), 1 + len(self.staff) + len(self.students))
         self.assertItemsEqual(
@@ -211,13 +230,13 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
         uni_message = u'ẗëṡẗ ṁëṡṡäġë ḟöṛ äḷḷ ｲ乇丂ｲ ﾶ乇丂丂ﾑg乇 ｷo尺 ﾑﾚﾚ тэѕт мэѕѕаБэ fоѓ аll'
         test_email = {
             'action': 'Send email',
-            'to_option': 'all',
+            'send_to': 'all',
             'subject': 'test subject for all',
             'message': uni_message
         }
-        response = self.client.post(self.url, test_email)
-
-        self.assertContains(response, "Your email was successfully queued for sending.")
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
 
         self.assertEquals(len(mail.outbox), 1 + len(self.staff) + len(self.students))
         self.assertItemsEqual(
@@ -242,13 +261,13 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
 
         test_email = {
             'action': 'Send email',
-            'to_option': 'all',
+            'send_to': 'all',
             'subject': 'test subject for all',
             'message': 'test message for all'
         }
-        response = self.client.post(self.url, test_email)
-
-        self.assertContains(response, "Your email was successfully queued for sending.")
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
 
         self.assertEquals(len(mail.outbox), 1 + len(self.staff) + len(self.students))
 
@@ -257,7 +276,7 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
             [self.instructor.email] + [s.email for s in self.staff] + [s.email for s in self.students]
         )
 
-    @override_settings(BULK_EMAIL_EMAILS_PER_TASK=3, BULK_EMAIL_EMAILS_PER_QUERY=7)
+    @override_settings(BULK_EMAIL_EMAILS_PER_TASK=3)
     @patch('bulk_email.tasks.update_subtask_status')
     def test_chunked_queries_send_numerous_emails(self, email_mock):
         """
@@ -280,12 +299,14 @@ class TestEmailSendFromDashboard(ModuleStoreTestCase):
 
         test_email = {
             'action': 'Send email',
-            'to_option': 'all',
+            'send_to': 'all',
             'subject': 'test subject for all',
             'message': 'test message for all'
         }
-        response = self.client.post(self.url, test_email)
-        self.assertContains(response, "Your email was successfully queued for sending.")
+        # Post the email to the instructor dashboard API
+        response = self.client.post(self.send_mail_url, test_email)
+        self.assertEquals(json.loads(response.content), self.success_content)
+
         self.assertEquals(mock_factory.emails_sent,
                           1 + len(self.staff) + len(self.students) + LARGE_NUM_EMAILS - len(optouts))
         outbox_contents = [e.to[0] for e in mail.outbox]

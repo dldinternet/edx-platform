@@ -12,11 +12,12 @@ from django.test.utils import override_settings
 from django.utils.timezone import utc
 
 from courseware.models import StudentModule
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 from student.tests.factories import UserFactory
 from xmodule.fields import Date
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory, ItemFactory
+from opaque_keys.edx.keys import CourseKey
 
 from ..views import tools
 
@@ -38,7 +39,7 @@ class TestHandleDashboardError(unittest.TestCase):
     Test handle_dashboard_error decorator.
     """
     def test_error(self):
-        # pylint: disable=W0613
+        # pylint: disable=unused-argument
         @tools.handle_dashboard_error
         def view(request, course_id):
             """
@@ -50,7 +51,7 @@ class TestHandleDashboardError(unittest.TestCase):
         self.assertEqual(response, {'error': 'Oh noes!'})
 
     def test_no_error(self):
-        # pylint: disable=W0613
+        # pylint: disable=unused-argument
         @tools.handle_dashboard_error
         def view(request, course_id):
             """
@@ -59,6 +60,27 @@ class TestHandleDashboardError(unittest.TestCase):
             return "Oh yes!"
 
         self.assertEqual(view(None, None), "Oh yes!")
+
+
+class TestRequireStudentIdentifier(unittest.TestCase):
+    """
+    Test require_student_from_identifier()
+    """
+    def setUp(self):
+        """
+        Fixtures
+        """
+        self.student = UserFactory.create()
+
+    def test_valid_student_id(self):
+        self.assertEqual(
+            self.student,
+            tools.require_student_from_identifier(self.student.username)
+        )
+
+    def test_invalid_student_id(self):
+        with self.assertRaises(tools.DashboardError):
+            tools.require_student_from_identifier("invalid")
 
 
 class TestParseDatetime(unittest.TestCase):
@@ -75,7 +97,7 @@ class TestParseDatetime(unittest.TestCase):
             tools.parse_datetime('foo')
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestFindUnit(ModuleStoreTestCase):
     """
     Test the find_unit function.
@@ -86,10 +108,8 @@ class TestFindUnit(ModuleStoreTestCase):
         Fixtures.
         """
         course = CourseFactory.create()
-        week1 = ItemFactory.create()
-        homework = ItemFactory.create(parent_location=week1.location)
-        week1.children.append(homework.location)
-        course.children.append(week1.location)
+        week1 = ItemFactory.create(parent=course)
+        homework = ItemFactory.create(parent=week1)
 
         self.course = course
         self.homework = homework
@@ -98,7 +118,7 @@ class TestFindUnit(ModuleStoreTestCase):
         """
         Test finding a nested unit.
         """
-        url = self.homework.location.url()
+        url = self.homework.location.to_deprecated_string()
         self.assertEqual(tools.find_unit(self.course, url), self.homework)
 
     def test_find_unit_notfound(self):
@@ -110,7 +130,7 @@ class TestFindUnit(ModuleStoreTestCase):
             tools.find_unit(self.course, url)
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestGetUnitsWithDueDate(ModuleStoreTestCase):
     """
     Test the get_units_with_due_date function.
@@ -121,15 +141,13 @@ class TestGetUnitsWithDueDate(ModuleStoreTestCase):
         """
         due = datetime.datetime(2010, 5, 12, 2, 42, tzinfo=utc)
         course = CourseFactory.create()
-        week1 = ItemFactory.create(due=due)
-        week2 = ItemFactory.create(due=due)
-        course.children = [week1.location.url(), week2.location.url()]
+        week1 = ItemFactory.create(due=due, parent=course)
+        week2 = ItemFactory.create(due=due, parent=course)
 
         homework = ItemFactory.create(
-            parent_location=week1.location,
+            parent=week1,
             due=due
         )
-        week1.children = [homework.location.url()]
 
         self.course = course
         self.week1 = week1
@@ -139,7 +157,7 @@ class TestGetUnitsWithDueDate(ModuleStoreTestCase):
 
         def urls(seq):
             "URLs for sequence of nodes."
-            return sorted(i.location.url() for i in seq)
+            return sorted(i.location.to_deprecated_string() for i in seq)
 
         self.assertEquals(
             urls(tools.get_units_with_due_date(self.course)),
@@ -156,11 +174,11 @@ class TestTitleOrUrl(unittest.TestCase):
 
     def test_url(self):
         unit = mock.Mock(display_name=None)
-        unit.location.url.return_value = 'test:hello'
+        unit.location.to_deprecated_string.return_value = 'test:hello'
         self.assertEquals(tools.title_or_url(unit), 'test:hello')
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestSetDueDateExtension(ModuleStoreTestCase):
     """
     Test the set_due_date_extensions function.
@@ -171,50 +189,70 @@ class TestSetDueDateExtension(ModuleStoreTestCase):
         """
         due = datetime.datetime(2010, 5, 12, 2, 42, tzinfo=utc)
         course = CourseFactory.create()
-        week1 = ItemFactory.create(due=due)
-        week2 = ItemFactory.create(due=due)
-        course.children = [week1.location.url(), week2.location.url()]
+        week1 = ItemFactory.create(due=due, parent=course)
+        week2 = ItemFactory.create(due=due, parent=course)
+        week3 = ItemFactory.create(parent=course)
 
         homework = ItemFactory.create(
-            parent_location=week1.location,
+            parent=week1,
             due=due
         )
-        week1.children = [homework.location.url()]
 
         user = UserFactory.create()
         StudentModule(
             state='{}',
             student_id=user.id,
             course_id=course.id,
-            module_state_key=week1.location.url()).save()
+            module_state_key=week1.location).save()
         StudentModule(
             state='{}',
             student_id=user.id,
             course_id=course.id,
-            module_state_key=homework.location.url()).save()
+            module_state_key=homework.location).save()
 
         self.course = course
         self.week1 = week1
         self.homework = homework
         self.week2 = week2
+        self.week3 = week3
         self.user = user
 
         self.extended_due = functools.partial(
-            get_extended_due, course, student=user)
+            tools.get_extended_due, course, student=user)
 
     def test_set_due_date_extension(self):
         extended = datetime.datetime(2013, 12, 25, 0, 0, tzinfo=utc)
-        tools.set_due_date_extension(self.course, self.week1, self.user,
-                                     extended)
+        tools.set_due_date_extension(self.course, self.week1, self.user, extended)
         self.assertEqual(self.extended_due(self.week1), extended)
         self.assertEqual(self.extended_due(self.homework), extended)
 
+    def test_set_due_date_extension_create_studentmodule(self):
+        extended = datetime.datetime(2013, 12, 25, 0, 0, tzinfo=utc)
+        user = UserFactory.create()  # No student modules for this user
+        tools.set_due_date_extension(self.course, self.week1, user, extended)
+        extended_due = functools.partial(tools.get_extended_due, self.course, student=user)
+        self.assertEqual(extended_due(self.week1), extended)
+        self.assertEqual(extended_due(self.homework), extended)
+
+    def test_set_due_date_extension_invalid_date(self):
+        extended = datetime.datetime(2009, 1, 1, 0, 0, tzinfo=utc)
+        with self.assertRaises(tools.DashboardError):
+            tools.set_due_date_extension(self.course, self.week1, self.user, extended)
+
+    def test_set_due_date_extension_no_date(self):
+        extended = datetime.datetime(2013, 12, 25, 0, 0, tzinfo=utc)
+        with self.assertRaises(tools.DashboardError):
+            tools.set_due_date_extension(self.course, self.week3, self.user, extended)
+
     def test_reset_due_date_extension(self):
+        extended = datetime.datetime(2013, 12, 25, 0, 0, tzinfo=utc)
+        tools.set_due_date_extension(self.course, self.week1, self.user, extended)
         tools.set_due_date_extension(self.course, self.week1, self.user, None)
         self.assertEqual(self.extended_due(self.week1), None)
+        self.assertEqual(self.extended_due(self.homework), None)
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestDataDumps(ModuleStoreTestCase):
     """
     Test data dumps for reporting.
@@ -226,63 +264,60 @@ class TestDataDumps(ModuleStoreTestCase):
         """
         due = datetime.datetime(2010, 5, 12, 2, 42, tzinfo=utc)
         course = CourseFactory.create()
-        week1 = ItemFactory.create(due=due)
-        week2 = ItemFactory.create(due=due)
-        week3 = ItemFactory.create(due=due)
-        course.children = [week1.location.url(), week2.location.url(),
-                           week3.location.url()]
+        week1 = ItemFactory.create(due=due, parent=course)
+        week2 = ItemFactory.create(due=due, parent=course)
+        week3 = ItemFactory.create(due=due, parent=course)
 
         homework = ItemFactory.create(
-            parent_location=week1.location,
+            parent=week1,
             due=due
         )
-        week1.children = [homework.location.url()]
 
         user1 = UserFactory.create()
         StudentModule(
             state='{}',
             student_id=user1.id,
             course_id=course.id,
-            module_state_key=week1.location.url()).save()
+            module_state_key=week1.location).save()
         StudentModule(
             state='{}',
             student_id=user1.id,
             course_id=course.id,
-            module_state_key=week2.location.url()).save()
+            module_state_key=week2.location).save()
         StudentModule(
             state='{}',
             student_id=user1.id,
             course_id=course.id,
-            module_state_key=week3.location.url()).save()
+            module_state_key=week3.location).save()
         StudentModule(
             state='{}',
             student_id=user1.id,
             course_id=course.id,
-            module_state_key=homework.location.url()).save()
+            module_state_key=homework.location).save()
 
         user2 = UserFactory.create()
         StudentModule(
             state='{}',
             student_id=user2.id,
             course_id=course.id,
-            module_state_key=week1.location.url()).save()
+            module_state_key=week1.location).save()
         StudentModule(
             state='{}',
             student_id=user2.id,
             course_id=course.id,
-            module_state_key=homework.location.url()).save()
+            module_state_key=homework.location).save()
 
         user3 = UserFactory.create()
         StudentModule(
             state='{}',
             student_id=user3.id,
             course_id=course.id,
-            module_state_key=week1.location.url()).save()
+            module_state_key=week1.location).save()
         StudentModule(
             state='{}',
             student_id=user3.id,
             course_id=course.id,
-            module_state_key=homework.location.url()).save()
+            module_state_key=homework.location).save()
 
         self.course = course
         self.week1 = week1
@@ -330,17 +365,13 @@ class TestDataDumps(ModuleStoreTestCase):
              "Extended Due Date": "2013-12-25 00:00"}])
 
 
-def get_extended_due(course, unit, student):
+def msk_from_problem_urlname(course_id, urlname, block_type='problem'):
     """
-    Get the extended due date out of a student's state for a particular unit.
+    Convert a 'problem urlname' to a module state key (db field)
     """
-    student_module = StudentModule.objects.get(
-        student_id=student.id,
-        course_id=course.id,
-        module_state_key=unit.location.url()
-    )
+    if not isinstance(course_id, CourseKey):
+        raise ValueError
+    if urlname.endswith(".xml"):
+        urlname = urlname[:-4]
 
-    state = json.loads(student_module.state)
-    extended = state.get('extended_due', None)
-    if extended:
-        return DATE_FIELD.from_json(extended)
+    return course_id.make_usage_key(block_type, urlname)

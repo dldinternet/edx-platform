@@ -1,12 +1,12 @@
-# pylint: disable=C0111
-# pylint: disable=W0621
+# pylint: disable=missing-docstring
+# pylint: disable=redefined-outer-name
 
 import urllib
 from lettuce import world
-from django.contrib.auth.models import User, Group
+from django.contrib.auth.models import User
 from student.models import CourseEnrollment
-from xmodule.modulestore.django import editable_modulestore
-from xmodule.contentstore.django import contentstore
+from xmodule.modulestore.django import modulestore, clear_existing_modulestores
+from xmodule.contentstore.django import _CONTENTSTORE
 
 
 @world.absorb
@@ -33,7 +33,7 @@ def log_in(username='robot', password='test', email='robot@edx.org', name="Robot
     Use the auto_auth feature to programmatically log the user in
     """
     url = '/auto_auth'
-    params = { 'username': username, 'password': password, 'email': email, 'full_name': name }
+    params = {'username': username, 'password': password, 'email': email, 'full_name': name}
     url += "?" + urllib.urlencode(params)
     world.visit(url)
 
@@ -43,7 +43,7 @@ def log_in(username='robot', password='test', email='robot@edx.org', name="Robot
 
 
 @world.absorb
-def register_by_course_id(course_id, username='robot', password='test', is_staff=False):
+def register_by_course_key(course_key, username='robot', password='test', is_staff=False):
     create_user(username, password)
     user = User.objects.get(username=username)
     # Note: this flag makes the user global staff - that is, an edX employee - not a course staff.
@@ -51,17 +51,17 @@ def register_by_course_id(course_id, username='robot', password='test', is_staff
     if is_staff:
         user.is_staff = True
         user.save()
-    CourseEnrollment.enroll(user, course_id)
+    CourseEnrollment.enroll(user, course_key)
 
 
 @world.absorb
-def enroll_user(user, course_id):
+def enroll_user(user, course_key):
     # Activate user
     registration = world.RegistrationFactory(user=user)
     registration.register(user)
     registration.activate()
     # Enroll them in the course
-    CourseEnrollment.enroll(user, course_id)
+    CourseEnrollment.enroll(user, course_key)
 
 
 @world.absorb
@@ -71,5 +71,6 @@ def clear_courses():
     # (though it shouldn't), do this manually
     # from the bash shell to drop it:
     # $ mongo test_xmodule --eval "db.dropDatabase()"
-    editable_modulestore().collection.drop()
-    contentstore().fs_files.drop()
+    modulestore()._drop_database()  # pylint: disable=protected-access
+    _CONTENTSTORE.clear()
+    clear_existing_modulestores()

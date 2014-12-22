@@ -17,11 +17,13 @@ from django.utils.translation import ugettext as _
 import mongoengine
 
 from dashboard.models import CourseImportLog
-from xmodule.modulestore import Location
+from opaque_keys import InvalidKeyError
+from opaque_keys.edx.keys import CourseKey
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
 log = logging.getLogger(__name__)
 
-GIT_REPO_DIR = getattr(settings, 'GIT_REPO_DIR', '/opt/edx/course_repos')
+GIT_REPO_DIR = getattr(settings, 'GIT_REPO_DIR', '/edx/var/app/edxapp/course_repos')
 GIT_IMPORT_STATIC = getattr(settings, 'GIT_IMPORT_STATIC', True)
 
 
@@ -48,6 +50,7 @@ class GitImportError(Exception):
     # doesn't exist, or there is a problem changing to it.
     CANNOT_BRANCH = _('Unable to switch to specified branch. Please check '
                       'your branch name.')
+
 
 def cmd_log(cmd, cwd):
     """
@@ -84,7 +87,7 @@ def switch_branch(branch, rdir):
     except subprocess.CalledProcessError as ex:
         log.exception('Getting a list of remote branches failed: %r', ex.output)
         raise GitImportError(GitImportError.CANNOT_BRANCH)
-    if not branch in output:
+    if branch not in output:
         raise GitImportError(GitImportError.REMOTE_BRANCH_MISSING)
     # Check it the remote branch has already been made locally
     cmd = ['git', 'branch', '-a', ]
@@ -121,11 +124,12 @@ def add_repo(repo, rdir_in, branch=None):
     If branch is left as None, it will fetch the most recent
     version of the current branch.
     """
-    # pylint: disable=R0915
+    # pylint: disable=too-many-statements
 
     # Set defaults even if it isn't defined in settings
     mongo_db = {
         'host': 'localhost',
+        'port': 27017,
         'user': '',
         'password': '',
         'db': 'xlog',
@@ -133,7 +137,7 @@ def add_repo(repo, rdir_in, branch=None):
 
     # Allow overrides
     if hasattr(settings, 'MONGODB_LOG'):
-        for config_item in ['host', 'user', 'password', 'db', ]:
+        for config_item in ['host', 'user', 'password', 'db', 'port']:
             mongo_db[config_item] = settings.MONGODB_LOG.get(
                 config_item, mongo_db[config_item])
 
@@ -222,19 +226,19 @@ def add_repo(repo, rdir_in, branch=None):
         logger.setLevel(logging.NOTSET)
         logger.removeHandler(import_log_handler)
 
-    course_id = 'unknown'
+    course_key = None
     location = 'unknown'
 
     # extract course ID from output of import-command-run and make symlink
     # this is needed in order for custom course scripts to work
-    match = re.search('(?ms)===> IMPORTING course to location (\S+)',
-                      ret_import)
+    match = re.search(r'(?ms)===> IMPORTING course (\S+)', ret_import)
     if match:
-        location = Location(match.group(1))
-        log.debug('location = {0}'.format(location))
-        course_id = location.course_id
-
-        cdir = '{0}/{1}'.format(GIT_REPO_DIR, location.course)
+        course_id = match.group(1)
+        try:
+            course_key = CourseKey.from_string(course_id)
+        except InvalidKeyError:
+            course_key = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+        cdir = '{0}/{1}'.format(GIT_REPO_DIR, course_key.course)
         log.debug('Studio course dir = {0}'.format(cdir))
 
         if os.path.exists(cdir) and not os.path.islink(cdir):
@@ -256,19 +260,19 @@ def add_repo(repo, rdir_in, branch=None):
                                               cwd=os.path.abspath(cdir)))
 
     # store import-command-run output in mongo
-    mongouri = 'mongodb://{user}:{password}@{host}/{db}'.format(**mongo_db)
+    mongouri = 'mongodb://{user}:{password}@{host}:{port}/{db}'.format(**mongo_db)
 
     try:
         if mongo_db['user'] and mongo_db['password']:
             mdb = mongoengine.connect(mongo_db['db'], host=mongouri)
         else:
-            mdb = mongoengine.connect(mongo_db['db'], host=mongo_db['host'])
+            mdb = mongoengine.connect(mongo_db['db'], host=mongo_db['host'], port=mongo_db['port'])
     except mongoengine.connection.ConnectionError:
         log.exception('Unable to connect to mongodb to save log, please '
                       'check MONGODB_LOG settings')
     cil = CourseImportLog(
-        course_id=course_id,
-        location=unicode(location),
+        course_id=course_key,
+        location=location,
         repo_dir=rdir,
         created=timezone.now(),
         import_log=ret_import,

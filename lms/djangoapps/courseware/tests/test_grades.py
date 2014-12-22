@@ -4,13 +4,13 @@ Test grade calculation.
 from django.http import Http404
 from django.test.utils import override_settings
 from mock import patch
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
+from courseware.grades import grade, iterate_grades_for
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 from student.tests.factories import UserFactory
 from xmodule.modulestore.tests.factories import CourseFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
-
-from courseware.grades import grade, iterate_grades_for
 
 
 def _grade_with_errors(student, request, course, keep_raw_scores=False):
@@ -27,7 +27,7 @@ def _grade_with_errors(student, request, course, keep_raw_scores=False):
     return grade(student, request, course, keep_raw_scores=keep_raw_scores)
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestGradeIteration(ModuleStoreTestCase):
     """
     Test iteration through student gradesets.
@@ -62,7 +62,7 @@ class TestGradeIteration(ModuleStoreTestCase):
         should be raised. This is a horrible crossing of abstraction boundaries
         and should be fixed, but for now we're just testing the behavior. :-("""
         with self.assertRaises(Http404):
-            gradeset_results = iterate_grades_for("I/dont/exist", [])
+            gradeset_results = iterate_grades_for(SlashSeparatedCourseKey("I", "dont", "exist"), [])
             gradeset_results.next()
 
     def test_all_empty_grades(self):

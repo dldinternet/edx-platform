@@ -1,8 +1,8 @@
-# pylint: disable=C0111
-# pylint: disable=W0621
+# pylint: disable=missing-docstring
+# pylint: disable=redefined-outer-name
 
 from lettuce import world, step
-from common import course_id, course_location
+from common import course_location
 from problems_setup import PROBLEM_DICT
 from nose.tools import assert_in
 
@@ -148,9 +148,9 @@ def create_course():
 
 
 def create_user_and_visit_course():
-    world.register_by_course_id('edx/999/Test_Course')
+    world.register_by_course_key(world.scenario_dict['COURSE'].id)
     world.log_in()
-    world.visit('/courses/edx/999/Test_Course/courseware/')
+    world.visit(u'/courses/{}/courseware/'.format(world.scenario_dict['COURSE'].id))
 
 
 def add_problem_to_course_section(parent_location, display_name):

@@ -19,12 +19,14 @@ TODO:
 
 import json
 from lxml import etree
+from lxml.html import fromstring
 import unittest
 import textwrap
 import xml.sax.saxutils as saxutils
 
 from . import test_capa_system
 from capa import inputtypes
+from capa.checker import DemoSystem
 from mock import ANY, patch
 from pyparsing import ParseException
 
@@ -52,7 +54,7 @@ class OptionInputTest(unittest.TestCase):
                  'status': 'answered'}
         option_input = lookup_tag('optioninput')(test_capa_system(), element, state)
 
-        context = option_input._get_render_context()  # pylint: disable=W0212
+        context = option_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -112,7 +114,7 @@ class ChoiceGroupTest(unittest.TestCase):
 
         the_input = lookup_tag(tag)(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -166,7 +168,7 @@ class JavascriptInputTest(unittest.TestCase):
         state = {'value': '3', }
         the_input = lookup_tag('javascriptinput')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -198,7 +200,7 @@ class TextLineTest(unittest.TestCase):
         state = {'value': 'BumbleBee', }
         the_input = lookup_tag('textline')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -230,7 +232,7 @@ class TextLineTest(unittest.TestCase):
         state = {'value': 'BumbleBee', }
         the_input = lookup_tag('textline')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -274,7 +276,7 @@ class TextLineTest(unittest.TestCase):
             state = {'value': 'BumbleBee', }
             the_input = lookup_tag('textline')(test_capa_system(), element, state)
 
-            context = the_input._get_render_context()  # pylint: disable=W0212
+            context = the_input._get_render_context()  # pylint: disable=protected-access
 
             expected = {
                 'STATIC_URL': '/dummy-static/',
@@ -316,7 +318,7 @@ class FileSubmissionTest(unittest.TestCase):
         input_class = lookup_tag('filesubmission')
         the_input = input_class(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -365,7 +367,7 @@ class CodeInputTest(unittest.TestCase):
         input_class = lookup_tag('codeinput')
         the_input = input_class(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -419,7 +421,7 @@ class MatlabTest(unittest.TestCase):
         self.the_input = self.input_class(test_capa_system(), elt, state)
 
     def test_rendering(self):
-        context = self.the_input._get_render_context()  # pylint: disable=W0212
+        context = self.the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -450,7 +452,7 @@ class MatlabTest(unittest.TestCase):
         elt = etree.fromstring(self.xml)
 
         the_input = self.input_class(test_capa_system(), elt, state)
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -482,7 +484,7 @@ class MatlabTest(unittest.TestCase):
             elt = etree.fromstring(self.xml)
 
             the_input = self.input_class(test_capa_system(), elt, state)
-            context = the_input._get_render_context()  # pylint: disable=W0212
+            context = the_input._get_render_context()  # pylint: disable=protected-access
             expected = {
                 'STATIC_URL': '/dummy-static/',
                 'id': 'prob_1_2',
@@ -513,7 +515,7 @@ class MatlabTest(unittest.TestCase):
         elt = etree.fromstring(self.xml)
 
         the_input = self.input_class(test_capa_system(), elt, state)
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
         expected = {
             'STATIC_URL': '/dummy-static/',
             'id': 'prob_1_2',
@@ -600,9 +602,7 @@ class MatlabTest(unittest.TestCase):
         elt = etree.fromstring(self.xml)
 
         the_input = self.input_class(test_capa_system(), elt, state)
-        context = the_input._get_render_context()
         self.assertEqual(the_input.status, 'queued')
-
 
     @patch('capa.inputtypes.time.time', return_value=45)
     def test_matlab_response_timeout_exceeded(self, time):
@@ -611,7 +611,6 @@ class MatlabTest(unittest.TestCase):
         elt = etree.fromstring(self.xml)
 
         the_input = self.input_class(test_capa_system(), elt, state)
-        context = the_input._get_render_context()
         self.assertEqual(the_input.status, 'unsubmitted')
         self.assertEqual(the_input.msg, 'No response from Xqueue within {} seconds. Aborted.'.format(XQUEUE_TIMEOUT))
 
@@ -624,9 +623,24 @@ class MatlabTest(unittest.TestCase):
         elt = etree.fromstring(self.xml)
 
         the_input = self.input_class(test_capa_system(), elt, state)
-        context = the_input._get_render_context()
         self.assertEqual(the_input.status, 'unsubmitted')
 
+    def test_matlab_api_key(self):
+        """
+        Test that api_key ends up in the xqueue payload
+        """
+        elt = etree.fromstring(self.xml)
+        system = test_capa_system()
+        system.matlab_api_key = 'test_api_key'
+        the_input = lookup_tag('matlabinput')(system, elt, {})
+
+        data = {'submission': 'x = 1234;'}
+        response = the_input.handle_ajax("plot", data)
+
+        body = system.xqueue['interface'].send_to_queue.call_args[1]['body']
+        payload = json.loads(body)
+        self.assertEqual('test_api_key', payload['token'])
+        self.assertEqual('2', payload['endpoint_version'])
 
     def test_get_html(self):
         # usual output
@@ -707,11 +721,92 @@ class MatlabTest(unittest.TestCase):
         elt = etree.fromstring(self.xml)
 
         the_input = self.input_class(test_capa_system(), elt, state)
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
         self.maxDiff = None
-        expected = u'\n<div class="matlabResponse"><div class="commandWindowOutput" style="white-space: pre;"> <strong>if</strong> Conditionally execute statements.\nThe general form of the <strong>if</strong> statement is\n\n   <strong>if</strong> expression\n     statements\n   ELSEIF expression\n     statements\n   ELSE\n     statements\n   END\n\nThe statements are executed if the real part of the expression\nhas all non-zero elements. The ELSE and ELSEIF parts are optional.\nZero or more ELSEIF parts can be used as well as nested <strong>if</strong>\'s.\nThe expression is usually of the form expr rop expr where\nrop is ==, &lt;, &gt;, &lt;=, &gt;=, or ~=.\n<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAjAAAAGkCAIAAACgj==">\n\nExample\n   if I == J\n     A(I,J) = 2;\n   elseif abs(I-J) == 1\n     A(I,J) = -1;\n   else\n     A(I,J) = 0;\n   end\n\nSee also <a>relop</a>, <a>else</a>, <a>elseif</a>, <a>end</a>, <a>for</a>, <a>while</a>, <a>switch</a>.\n\nReference page in Help browser\n   <a>doc if</a>\n\n</div><ul></ul></div>\n'
+        expected = fromstring(u'\n<div class="matlabResponse"><div class="commandWindowOutput" style="white-space: pre;"> <strong>if</strong> Conditionally execute statements.\nThe general form of the <strong>if</strong> statement is\n\n   <strong>if</strong> expression\n     statements\n   ELSEIF expression\n     statements\n   ELSE\n     statements\n   END\n\nThe statements are executed if the real part of the expression \nhas all non-zero elements. The ELSE and ELSEIF parts are optional.\nZero or more ELSEIF parts can be used as well as nested <strong>if</strong>\'s.\nThe expression is usually of the form expr rop expr where \nrop is ==, &lt;, &gt;, &lt;=, &gt;=, or ~=.\n<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAjAAAAGkCAIAAACgj==">\n\nExample\n   if I == J\n     A(I,J) = 2;\n   elseif abs(I-J) == 1\n     A(I,J) = -1;\n   else\n     A(I,J) = 0;\n   end\n\nSee also <a>relop</a>, <a>else</a>, <a>elseif</a>, <a>end</a>, <a>for</a>, <a>while</a>, <a>switch</a>.\n\nReference page in Help browser\n   <a>doc if</a>\n\n</div><ul></ul></div>\n')
+        received = fromstring(context['queue_msg'])
+        html_tree_equal(received, expected)
 
-        self.assertEqual(context['queue_msg'], expected)
+    def test_rendering_with_invalid_queue_msg(self):
+        self.the_input.queue_msg = (u"<div class='matlabResponse'><div style='white-space:pre' class='commandWindowOutput'>"
+                                    u"\nans =\n\n\u0002\n\n</div><ul></ul></div>")
+        context = self.the_input._get_render_context()  # pylint: disable=protected-access
+
+        self.maxDiff = None
+        expected = {
+            'STATIC_URL': '/dummy-static/',
+            'id': 'prob_1_2',
+            'value': 'print "good evening"',
+            'status': inputtypes.Status('queued'),
+            'msg': self.the_input.submitted_msg,
+            'mode': self.mode,
+            'rows': self.rows,
+            'cols': self.cols,
+            'queue_msg': "<span>Error running code.</span>",
+            'linenumbers': 'true',
+            'hidden': '',
+            'tabsize': int(self.tabsize),
+            'button_enabled': True,
+            'queue_len': '3',
+            'matlab_editor_js': '/dummy-static/js/vendor/CodeMirror/octave.js',
+        }
+
+        self.assertEqual(context, expected)
+        self.the_input.capa_system.render_template = DemoSystem().render_template
+        self.the_input.get_html()  # Should not raise an exception
+
+    def test_matlab_queue_message_allowed_tags(self):
+        """
+        Test allowed tags.
+        """
+        allowed_tags = ['div', 'p', 'audio', 'pre', 'span']
+        for tag in allowed_tags:
+            queue_msg = "<{0}>Test message</{0}>".format(tag)
+            state = {
+                'input_state': {'queue_msg': queue_msg},
+                'status': 'queued',
+            }
+            elt = etree.fromstring(self.xml)
+            the_input = self.input_class(test_capa_system(), elt, state)
+            self.assertEqual(the_input.queue_msg, queue_msg)
+
+    def test_matlab_queue_message_not_allowed_tag(self):
+        """
+        Test not allowed tag.
+        """
+        not_allowed_tag = 'script'
+        queue_msg = "<{0}>Test message</{0}>".format(not_allowed_tag)
+        state = {
+            'input_state': {'queue_msg': queue_msg},
+            'status': 'queued',
+        }
+        elt = etree.fromstring(self.xml)
+        the_input = self.input_class(test_capa_system(), elt, state)
+        expected = "&lt;script&gt;Test message&lt;/script&gt;"
+        self.assertEqual(the_input.queue_msg, expected)
+
+    def test_matlab_sanitize_msg(self):
+        """
+        Check that the_input.msg is sanitized.
+        """
+        not_allowed_tag = 'script'
+        self.the_input.msg = "<{0}>Test message</{0}>".format(not_allowed_tag)
+        expected = "&lt;script&gt;Test message&lt;/script&gt;"
+        self.assertEqual(self.the_input._get_render_context()['msg'], expected)  # pylint: disable=protected-access
+
+
+def html_tree_equal(received, expected):
+    """
+    Returns whether two etree Elements are the same, with insensitivity to attribute order.
+    """
+    for attr in ('tag', 'attrib', 'text', 'tail'):
+        if getattr(received, attr) != getattr(expected, attr):
+            return False
+    if len(received) != len(expected):
+        return False
+    if any(not html_tree_equal(rec, exp) for rec, exp in zip(received, expected)):
+        return False
+    return True
 
 
 class SchematicTest(unittest.TestCase):
@@ -745,7 +840,7 @@ class SchematicTest(unittest.TestCase):
 
         the_input = lookup_tag('schematic')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -789,7 +884,7 @@ class ImageInputTest(unittest.TestCase):
 
         the_input = lookup_tag('imageinput')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -844,7 +939,7 @@ class CrystallographyTest(unittest.TestCase):
 
         the_input = lookup_tag('crystallography')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -886,7 +981,7 @@ class VseprTest(unittest.TestCase):
 
         the_input = lookup_tag('vsepr_input')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -918,7 +1013,7 @@ class ChemicalEquationTest(unittest.TestCase):
 
     def test_rendering(self):
         ''' Verify that the render context matches the expected render context'''
-        context = self.the_input._get_render_context()  # pylint: disable=W0212
+        context = self.the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -1006,7 +1101,7 @@ class FormulaEquationTest(unittest.TestCase):
         """
         Verify that the render context matches the expected render context
         """
-        context = self.the_input._get_render_context()  # pylint: disable=W0212
+        context = self.the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -1136,7 +1231,7 @@ class DragAndDropTest(unittest.TestCase):
 
         the_input = lookup_tag('drag_and_drop_input')(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
         expected = {
             'STATIC_URL': '/dummy-static/',
             'id': 'prob_1_2',
@@ -1188,7 +1283,7 @@ class AnnotationInputTest(unittest.TestCase):
 
         the_input = lookup_tag(tag)(test_capa_system(), element, state)
 
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
 
         expected = {
             'STATIC_URL': '/dummy-static/',
@@ -1278,7 +1373,7 @@ class TestChoiceText(unittest.TestCase):
         }
         expected.update(state)
         the_input = lookup_tag(tag)(test_capa_system(), element, state)
-        context = the_input._get_render_context()  # pylint: disable=W0212
+        context = the_input._get_render_context()  # pylint: disable=protected-access
         self.assertEqual(context, expected)
 
     def test_radiotextgroup(self):

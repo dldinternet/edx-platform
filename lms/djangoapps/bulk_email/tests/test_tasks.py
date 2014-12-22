@@ -35,6 +35,7 @@ from instructor_task.subtasks import update_subtask_status, SubtaskStatus
 from instructor_task.models import InstructorTask
 from instructor_task.tests.test_base import InstructorTaskCourseTestCase
 from instructor_task.tests.factories import InstructorTaskFactory
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
 
 class TestTaskFailure(Exception):
@@ -90,7 +91,7 @@ class TestBulkEmailInstructorTask(InstructorTaskCourseTestCase):
         to_option = SEND_TO_ALL
         course_id = course_id or self.course.id
         course_email = CourseEmail.create(course_id, self.instructor, to_option, "Test Subject", "<p>This is a test message</p>")
-        task_input = {'email_id': course_email.id}  # pylint: disable=E1101
+        task_input = {'email_id': course_email.id}  # pylint: disable=no-member
         task_id = str(uuid4())
         instructor_task = InstructorTaskFactory.create(
             course_id=course_id,
@@ -119,7 +120,7 @@ class TestBulkEmailInstructorTask(InstructorTaskCourseTestCase):
 
     def test_email_undefined_course(self):
         # Check that we fail when passing in a course that doesn't exist.
-        task_entry = self._create_input_entry(course_id="bogus/course/id")
+        task_entry = self._create_input_entry(course_id=SlashSeparatedCourseKey("bogus", "course", "id"))
         with self.assertRaises(ValueError):
             self._run_task_with_mock_celery(send_bulk_course_email, task_entry.id, task_entry.task_id)
 
@@ -133,7 +134,7 @@ class TestBulkEmailInstructorTask(InstructorTaskCourseTestCase):
 
         with self.assertRaises(ValueError):
             with patch('bulk_email.tasks.update_subtask_status', dummy_update_subtask_status):
-                send_bulk_course_email(task_entry.id, {})  # pylint: disable=E1101
+                send_bulk_course_email(task_entry.id, {})  # pylint: disable=no-member
 
     def _create_students(self, num_students):
         """Create students for testing"""

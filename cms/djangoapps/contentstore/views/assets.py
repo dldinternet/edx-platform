@@ -13,29 +13,29 @@ from django.conf import settings
 from edxmako.shortcuts import render_to_response
 from cache_toolbox.core import del_cached_content
 
+from contentstore.utils import reverse_course_url
 from xmodule.contentstore.django import contentstore
 from xmodule.modulestore.django import modulestore
-from xmodule.modulestore import Location
 from xmodule.contentstore.content import StaticContent
-from xmodule.modulestore import InvalidLocationError
 from xmodule.exceptions import NotFoundError
 from django.core.exceptions import PermissionDenied
-from xmodule.modulestore.django import loc_mapper
-from xmodule.modulestore.locator import BlockUsageLocator
+from opaque_keys.edx.keys import CourseKey, AssetKey
 
 from util.date_utils import get_default_time_display
 from util.json_request import JsonResponse
 from django.http import HttpResponseNotFound
 from django.utils.translation import ugettext as _
 from pymongo import ASCENDING, DESCENDING
-from .access import has_course_access
+from student.auth import has_course_author_access
+from xmodule.modulestore.exceptions import ItemNotFoundError
 
 __all__ = ['assets_handler']
 
 
+# pylint: disable=unused-argument
 @login_required
 @ensure_csrf_cookie
-def assets_handler(request, tag=None, package_id=None, branch=None, version_guid=None, block=None, asset_id=None):
+def assets_handler(request, course_key_string=None, asset_key_string=None):
     """
     The restful handler for assets.
     It allows retrieval of all the assets (as an HTML page), as well as uploading new assets,
@@ -56,38 +56,41 @@ def assets_handler(request, tag=None, package_id=None, branch=None, version_guid
     DELETE
         json: delete an asset
     """
-    location = BlockUsageLocator(package_id=package_id, branch=branch, version_guid=version_guid, block_id=block)
-    if not has_course_access(request.user, location):
+    course_key = CourseKey.from_string(course_key_string)
+    if not has_course_author_access(request.user, course_key):
         raise PermissionDenied()
 
     response_format = request.REQUEST.get('format', 'html')
     if response_format == 'json' or 'application/json' in request.META.get('HTTP_ACCEPT', 'application/json'):
         if request.method == 'GET':
-            return _assets_json(request, location)
+            return _assets_json(request, course_key)
         else:
-            return _update_asset(request, location, asset_id)
+            asset_key = AssetKey.from_string(asset_key_string) if asset_key_string else None
+            return _update_asset(request, course_key, asset_key)
     elif request.method == 'GET':  # assume html
-        return _asset_index(request, location)
+        return _asset_index(request, course_key)
     else:
         return HttpResponseNotFound()
 
 
-def _asset_index(request, location):
+def _asset_index(request, course_key):
     """
     Display an editable asset library.
 
     Supports start (0-based index into the list of assets) and max query parameters.
     """
-    old_location = loc_mapper().translate_locator_to_location(location)
-    course_module = modulestore().get_item(old_location)
+    course_module = modulestore().get_course(course_key)
 
     return render_to_response('asset_index.html', {
         'context_course': course_module,
-        'asset_callback_url': location.url_reverse('assets/', '')
+        'max_file_size_in_mbs': settings.MAX_ASSET_UPLOAD_FILE_SIZE_IN_MB,
+        'chunk_size_in_mbs': settings.UPLOAD_CHUNK_SIZE_IN_MB,
+        'max_file_size_redirect_url': settings.MAX_ASSET_UPLOAD_FILE_SIZE_URL,
+        'asset_callback_url': reverse_course_url('assets_handler', course_key)
     })
 
 
-def _assets_json(request, location):
+def _assets_json(request, course_key):
     """
     Display an editable asset library.
 
@@ -109,23 +112,23 @@ def _assets_json(request, location):
 
     current_page = max(requested_page, 0)
     start = current_page * requested_page_size
-    assets, total_count = _get_assets_for_page(request, location, current_page, requested_page_size, sort)
+    assets, total_count = _get_assets_for_page(request, course_key, current_page, requested_page_size, sort)
     end = start + len(assets)
 
     # If the query is beyond the final page, then re-query the final page so that at least one asset is returned
     if requested_page > 0 and start >= total_count:
         current_page = int(math.floor((total_count - 1) / requested_page_size))
         start = current_page * requested_page_size
-        assets, total_count = _get_assets_for_page(request, location, current_page, requested_page_size, sort)
+        assets, total_count = _get_assets_for_page(request, course_key, current_page, requested_page_size, sort)
         end = start + len(assets)
 
     asset_json = []
     for asset in assets:
-        asset_id = asset['_id']
-        asset_location = StaticContent.compute_location(asset_id['org'], asset_id['course'], asset_id['name'])
+        asset_location = asset['asset_key']
         # note, due to the schema change we may not have a 'thumbnail_location' in the result set
-        _thumbnail_location = asset.get('thumbnail_location', None)
-        thumbnail_location = Location(_thumbnail_location) if _thumbnail_location is not None else None
+        thumbnail_location = asset.get('thumbnail_location', None)
+        if thumbnail_location:
+            thumbnail_location = course_key.make_asset_key('thumbnail', thumbnail_location[4])
 
         asset_locked = asset.get('locked', False)
         asset_json.append(_get_asset_json(asset['displayname'], asset['uploadDate'], asset_location, thumbnail_location, asset_locked))
@@ -141,37 +144,40 @@ def _assets_json(request, location):
     })
 
 
-def _get_assets_for_page(request, location, current_page, page_size, sort):
+def _get_assets_for_page(request, course_key, current_page, page_size, sort):
     """
     Returns the list of assets for the specified page and page size.
     """
     start = current_page * page_size
 
-    old_location = loc_mapper().translate_locator_to_location(location)
-
-    course_reference = StaticContent.compute_location(old_location.org, old_location.course, old_location.name)
     return contentstore().get_all_content_for_course(
-        course_reference, start=start, maxresults=page_size, sort=sort
+        course_key, start=start, maxresults=page_size, sort=sort
     )
+
+
+def get_file_size(upload_file):
+    """
+    Helper method for getting file size of an upload file.
+    Can be used for mocking test file sizes.
+    """
+    return upload_file.size
 
 
 @require_POST
 @ensure_csrf_cookie
 @login_required
-def _upload_asset(request, location):
+def _upload_asset(request, course_key):
     '''
     This method allows for POST uploading of files into the course asset
     library, which will be supported by GridFS in MongoDB.
     '''
-    old_location = loc_mapper().translate_locator_to_location(location)
-
     # Does the course actually exist?!? Get anything from it to prove its
     # existence
     try:
-        modulestore().get_item(old_location)
-    except:
+        modulestore().get_course(course_key)
+    except ItemNotFoundError:
         # no return it as a Bad Request response
-        logging.error("Could not find course: %s", old_location)
+        logging.error("Could not find course: %s", course_key)
         return HttpResponseBadRequest()
 
     # compute a 'filename' which is similar to the location formatting, we're
@@ -181,8 +187,29 @@ def _upload_asset(request, location):
     upload_file = request.FILES['file']
     filename = upload_file.name
     mime_type = upload_file.content_type
+    size = get_file_size(upload_file)
 
-    content_loc = StaticContent.compute_location(old_location.org, old_location.course, filename)
+    # If file is greater than a specified size, reject the upload
+    # request and send a message to the user. Note that since
+    # the front-end may batch large file uploads in smaller chunks,
+    # we validate the file-size on the front-end in addition to
+    # validating on the backend. (see cms/static/js/views/assets.js)
+    max_file_size_in_bytes = settings.MAX_ASSET_UPLOAD_FILE_SIZE_IN_MB * 1000 ** 2
+    if size > max_file_size_in_bytes:
+        return JsonResponse({
+            'error': _(
+                'File {filename} exceeds maximum size of '
+                '{size_mb} MB. Please follow the instructions here '
+                'to upload a file elsewhere and link to it instead: '
+                '{faq_url}'
+            ).format(
+                filename=filename,
+                size_mb=settings.MAX_ASSET_UPLOAD_FILE_SIZE_IN_MB,
+                faq_url=settings.MAX_ASSET_UPLOAD_FILE_SIZE_URL,
+            )
+        }, status=413)
+
+    content_loc = StaticContent.compute_location(course_key, filename)
 
     chunked = upload_file.multiple_chunks()
     sc_partial = partial(StaticContent, content_loc, filename, mime_type)
@@ -195,8 +222,8 @@ def _upload_asset(request, location):
 
     # first let's see if a thumbnail can be created
     (thumbnail_content, thumbnail_location) = contentstore().generate_thumbnail(
-            content,
-            tempfile_path=tempfile_path
+        content,
+        tempfile_path=tempfile_path,
     )
 
     # delete cached thumbnail even if one couldn't be created this time (else
@@ -225,26 +252,17 @@ def _upload_asset(request, location):
 @require_http_methods(("DELETE", "POST", "PUT"))
 @login_required
 @ensure_csrf_cookie
-def _update_asset(request, location, asset_id):
+def _update_asset(request, course_key, asset_key):
     """
     restful CRUD operations for a course asset.
     Currently only DELETE, POST, and PUT methods are implemented.
 
-    asset_id: the URL of the asset (used by Backbone as the id)
+    asset_path_encoding: the odd /c4x/org/course/category/name repr of the asset (used by Backbone as the id)
     """
-    def get_asset_location(asset_id):
-        """ Helper method to get the location (and verify it is valid). """
-        try:
-            return StaticContent.get_location_from_path(asset_id)
-        except InvalidLocationError as err:
-            # return a 'Bad Request' to browser as we have a malformed Location
-            return JsonResponse({"error": err.message}, status=400)
-
     if request.method == 'DELETE':
-        loc = get_asset_location(asset_id)
         # Make sure the item to delete actually exists.
         try:
-            content = contentstore().find(loc)
+            content = contentstore().find(asset_key)
         except NotFoundError:
             return JsonResponse(status=404)
 
@@ -253,15 +271,18 @@ def _update_asset(request, location, asset_id):
 
         # see if there is a thumbnail as well, if so move that as well
         if content.thumbnail_location is not None:
+            # We are ignoring the value of the thumbnail_location-- we only care whether
+            # or not a thumbnail has been stored, and we can now easily create the correct path.
+            thumbnail_location = course_key.make_asset_key('thumbnail', asset_key.name)
             try:
-                thumbnail_content = contentstore().find(content.thumbnail_location)
+                thumbnail_content = contentstore().find(thumbnail_location)
                 contentstore('trashcan').save(thumbnail_content)
                 # hard delete thumbnail from origin
                 contentstore().delete(thumbnail_content.get_id())
                 # remove from any caching
-                del_cached_content(thumbnail_content.location)
+                del_cached_content(thumbnail_location)
             except:
-                logging.warning('Could not delete thumbnail: %s', content.thumbnail_location)
+                logging.warning('Could not delete thumbnail: %s', thumbnail_location)
 
         # delete the original
         contentstore().delete(content.get_id())
@@ -271,18 +292,16 @@ def _update_asset(request, location, asset_id):
 
     elif request.method in ('PUT', 'POST'):
         if 'file' in request.FILES:
-            return _upload_asset(request, location)
+            return _upload_asset(request, course_key)
         else:
             # Update existing asset
             try:
                 modified_asset = json.loads(request.body)
             except ValueError:
                 return HttpResponseBadRequest()
-            asset_id = modified_asset['url']
-            asset_location = get_asset_location(asset_id)
-            contentstore().set_attr(asset_location, 'locked', modified_asset['locked'])
+            contentstore().set_attr(asset_key, 'locked', modified_asset['locked'])
             # Delete the asset from the cache so we check the lock status the next time it is requested.
-            del_cached_content(asset_location)
+            del_cached_content(asset_key)
             return JsonResponse(modified_asset, status=201)
 
 
@@ -290,7 +309,7 @@ def _get_asset_json(display_name, date, location, thumbnail_location, locked):
     """
     Helper method for formatting the asset information to send to client.
     """
-    asset_url = StaticContent.get_url_path_from_location(location)
+    asset_url = StaticContent.serialize_asset_key_with_slash(location)
     external_url = settings.LMS_BASE + asset_url
     return {
         'display_name': display_name,
@@ -298,8 +317,8 @@ def _get_asset_json(display_name, date, location, thumbnail_location, locked):
         'url': asset_url,
         'external_url': external_url,
         'portable_url': StaticContent.get_static_path_from_location(location),
-        'thumbnail': StaticContent.get_url_path_from_location(thumbnail_location) if thumbnail_location is not None else None,
+        'thumbnail': StaticContent.serialize_asset_key_with_slash(thumbnail_location) if thumbnail_location else None,
         'locked': locked,
         # Needed for Backbone delete/update.
-        'id': asset_url
+        'id': unicode(location)
     }

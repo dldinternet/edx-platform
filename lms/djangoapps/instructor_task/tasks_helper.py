@@ -7,22 +7,29 @@ import json
 import urllib
 from datetime import datetime
 from time import time
+import unicodecsv
 
 from celery import Task, current_task
 from celery.utils.log import get_task_logger
 from celery.states import SUCCESS, FAILURE
 from django.contrib.auth.models import User
+from django.core.files.storage import DefaultStorage
 from django.db import transaction, reset_queries
-from dogapi import dog_stats_api
+import dogstats_wrapper as dog_stats_api
 from pytz import UTC
 
-from xmodule.modulestore.django import modulestore
 from track.views import task_track
+from util.file import course_filename_prefix_generator, UniversalNewlineIterator
+from xmodule.modulestore.django import modulestore
 
+from openedx.core.djangoapps.course_groups.models import CourseUserGroup
+from openedx.core.djangoapps.course_groups.cohorts import add_user_to_cohort
 from courseware.grades import iterate_grades_for
 from courseware.models import StudentModule
 from courseware.model_data import FieldDataCache
 from courseware.module_render import get_module_for_descriptor_internal
+from instructor_analytics.basic import enrolled_students_features
+from instructor_analytics.csvs import format_dictlist
 from instructor_task.models import ReportStore, InstructorTask, PROGRESS
 from student.models import CourseEnrollment
 
@@ -108,16 +115,16 @@ class BaseInstructorTask(Task):
         Note that there is no way to record progress made within the task (e.g. attempted,
         succeeded, etc.) when such failures occur.
         """
-        TASK_LOG.debug('Task %s: failure returned', task_id)
+        TASK_LOG.debug(u'Task %s: failure returned', task_id)
         entry_id = args[0]
         try:
             entry = InstructorTask.objects.get(pk=entry_id)
         except InstructorTask.DoesNotExist:
             # if the InstructorTask object does not exist, then there's no point
             # trying to update it.
-            TASK_LOG.error("Task (%s) has no InstructorTask object for id %s", task_id, entry_id)
+            TASK_LOG.error(u"Task (%s) has no InstructorTask object for id %s", task_id, entry_id)
         else:
-            TASK_LOG.warning("Task (%s) failed: %s %s", task_id, einfo.exception, einfo.traceback)
+            TASK_LOG.warning(u"Task (%s) failed", task_id, exc_info=True)
             entry.task_output = InstructorTask.create_output_for_failure(einfo.exception, einfo.traceback)
             entry.task_state = FAILURE
             entry.save_now()
@@ -144,6 +151,49 @@ def _get_current_task():
     `current_task` in production.
     """
     return current_task
+
+
+class TaskProgress(object):
+    """
+    Encapsulates the current task's progress by keeping track of
+    'attempted', 'succeeded', 'skipped', 'failed', 'total',
+    'action_name', and 'duration_ms' values.
+    """
+    def __init__(self, action_name, total, start_time):
+        self.action_name = action_name
+        self.total = total
+        self.start_time = start_time
+        self.attempted = 0
+        self.succeeded = 0
+        self.skipped = 0
+        self.failed = 0
+
+    def update_task_state(self, extra_meta=None):
+        """
+        Update the current celery task's state to the progress state
+        specified by the current object.  Returns the progress
+        dictionary for use by `run_main_task` and
+        `BaseInstructorTask.on_success`.
+
+        Arguments:
+            extra_meta (dict): Extra metadata to pass to `update_state`
+
+        Returns:
+            dict: The current task's progress dict
+        """
+        progress_dict = {
+            'action_name': self.action_name,
+            'attempted': self.attempted,
+            'succeeded': self.succeeded,
+            'skipped': self.skipped,
+            'failed': self.failed,
+            'total': self.total,
+            'duration_ms': int((time() - self.start_time) * 1000),
+        }
+        if extra_meta is not None:
+            progress_dict.update(extra_meta)
+        _get_current_task().update_state(state=PROGRESS, meta=progress_dict)
+        return progress_dict
 
 
 def run_main_task(entry_id, task_fcn, action_name):
@@ -196,7 +246,7 @@ def run_main_task(entry_id, task_fcn, action_name):
         raise ValueError(message)
 
     # Now do the work:
-    with dog_stats_api.timer('instructor_tasks.time.overall', tags=['action:{name}'.format(name=action_name)]):
+    with dog_stats_api.timer('instructor_tasks.time.overall', tags=[u'action:{name}'.format(name=action_name)]):
         task_progress = task_fcn(entry_id, course_id, task_input, action_name)
 
     # Release any queries that the connection has been hanging onto:
@@ -241,18 +291,15 @@ def perform_module_state_update(update_fcn, filter_fcn, _entry_id, course_id, ta
     result object.
 
     """
-    # get start time for task:
     start_time = time()
-
-    module_state_key = task_input.get('problem_url')
+    usage_key = course_id.make_usage_key_from_deprecated_string(task_input.get('problem_url'))
     student_identifier = task_input.get('student')
 
     # find the problem descriptor:
-    module_descriptor = modulestore().get_instance(course_id, module_state_key)
+    module_descriptor = modulestore().get_item(usage_key)
 
     # find the module in question
-    modules_to_update = StudentModule.objects.filter(course_id=course_id,
-                                                     module_state_key=module_state_key)
+    modules_to_update = StudentModule.objects.filter(course_id=course_id, module_state_key=usage_key)
 
     # give the option of updating an individual student. If not specified,
     # then updates all students who have responded to a problem so far
@@ -271,50 +318,27 @@ def perform_module_state_update(update_fcn, filter_fcn, _entry_id, course_id, ta
     if filter_fcn is not None:
         modules_to_update = filter_fcn(modules_to_update)
 
-    # perform the main loop
-    num_attempted = 0
-    num_succeeded = 0
-    num_skipped = 0
-    num_failed = 0
-    num_total = modules_to_update.count()
+    task_progress = TaskProgress(action_name, modules_to_update.count(), start_time)
+    task_progress.update_task_state()
 
-    def get_task_progress():
-        """Return a dict containing info about current task"""
-        current_time = time()
-        progress = {'action_name': action_name,
-                    'attempted': num_attempted,
-                    'succeeded': num_succeeded,
-                    'skipped': num_skipped,
-                    'failed': num_failed,
-                    'total': num_total,
-                    'duration_ms': int((current_time - start_time) * 1000),
-                    }
-        return progress
-
-    task_progress = get_task_progress()
-    _get_current_task().update_state(state=PROGRESS, meta=task_progress)
     for module_to_update in modules_to_update:
-        num_attempted += 1
+        task_progress.attempted += 1
         # There is no try here:  if there's an error, we let it throw, and the task will
         # be marked as FAILED, with a stack trace.
-        with dog_stats_api.timer('instructor_tasks.module.time.step', tags=['action:{name}'.format(name=action_name)]):
+        with dog_stats_api.timer('instructor_tasks.module.time.step', tags=[u'action:{name}'.format(name=action_name)]):
             update_status = update_fcn(module_descriptor, module_to_update)
             if update_status == UPDATE_STATUS_SUCCEEDED:
                 # If the update_fcn returns true, then it performed some kind of work.
                 # Logging of failures is left to the update_fcn itself.
-                num_succeeded += 1
+                task_progress.succeeded += 1
             elif update_status == UPDATE_STATUS_FAILED:
-                num_failed += 1
+                task_progress.failed += 1
             elif update_status == UPDATE_STATUS_SKIPPED:
-                num_skipped += 1
+                task_progress.skipped += 1
             else:
                 raise UpdateProblemModuleStateError("Unexpected update_status returned: {}".format(update_status))
 
-        # update task status:
-        task_progress = get_task_progress()
-        _get_current_task().update_state(state=PROGRESS, meta=task_progress)
-
-    return task_progress
+    return task_progress.update_task_state()
 
 
 def _get_task_id_from_xmodule_args(xmodule_instance_args):
@@ -373,9 +397,17 @@ def _get_module_instance_for_task(course_id, student, module_descriptor, xmodule
     xqueue_callback_url_prefix = xmodule_instance_args.get('xqueue_callback_url_prefix', '') \
         if xmodule_instance_args is not None else ''
 
-    return get_module_for_descriptor_internal(student, module_descriptor, field_data_cache, course_id,
-                                              make_track_function(), xqueue_callback_url_prefix,
-                                              grade_bucket_type=grade_bucket_type)
+    return get_module_for_descriptor_internal(
+        user=student,
+        descriptor=module_descriptor,
+        field_data_cache=field_data_cache,
+        course_id=course_id,
+        track_function=make_track_function(),
+        xqueue_callback_url_prefix=xqueue_callback_url_prefix,
+        grade_bucket_type=grade_bucket_type,
+        # This module isn't being used for front-end rendering
+        request_token=None,
+    )
 
 
 @transaction.autocommit
@@ -394,13 +426,13 @@ def rescore_problem_module_state(xmodule_instance_args, module_descriptor, stude
     # unpack the StudentModule:
     course_id = student_module.course_id
     student = student_module.student
-    module_state_key = student_module.module_state_key
+    usage_key = student_module.module_state_key
     instance = _get_module_instance_for_task(course_id, student, module_descriptor, xmodule_instance_args, grade_bucket_type='rescore')
 
     if instance is None:
         # Either permissions just changed, or someone is trying to be clever
         # and load something they shouldn't have access to.
-        msg = "No module {loc} for student {student}--access denied?".format(loc=module_state_key,
+        msg = "No module {loc} for student {student}--access denied?".format(loc=usage_key,
                                                                              student=student)
         TASK_LOG.debug(msg)
         raise UpdateProblemModuleStateError(msg)
@@ -416,15 +448,15 @@ def rescore_problem_module_state(xmodule_instance_args, module_descriptor, stude
     if 'success' not in result:
         # don't consider these fatal, but false means that the individual call didn't complete:
         TASK_LOG.warning(u"error processing rescore call for course {course}, problem {loc} and student {student}: "
-                         u"unexpected response {msg}".format(msg=result, course=course_id, loc=module_state_key, student=student))
+                         u"unexpected response {msg}".format(msg=result, course=course_id, loc=usage_key, student=student))
         return UPDATE_STATUS_FAILED
     elif result['success'] not in ['correct', 'incorrect']:
         TASK_LOG.warning(u"error processing rescore call for course {course}, problem {loc} and student {student}: "
-                         u"{msg}".format(msg=result['success'], course=course_id, loc=module_state_key, student=student))
+                         u"{msg}".format(msg=result['success'], course=course_id, loc=usage_key, student=student))
         return UPDATE_STATUS_FAILED
     else:
         TASK_LOG.debug(u"successfully processed rescore call for course {course}, problem {loc} and student {student}: "
-                       u"{msg}".format(msg=result['success'], course=course_id, loc=module_state_key, student=student))
+                       u"{msg}".format(msg=result['success'], course=course_id, loc=usage_key, student=student))
         return UPDATE_STATUS_SUCCEEDED
 
 
@@ -470,7 +502,33 @@ def delete_problem_module_state(xmodule_instance_args, _module_descriptor, stude
     return UPDATE_STATUS_SUCCEEDED
 
 
-def push_grades_to_s3(_xmodule_instance_args, _entry_id, course_id, _task_input, action_name):
+def upload_csv_to_report_store(rows, csv_name, course_id, timestamp):
+    """
+    Upload data as a CSV using ReportStore.
+
+    Arguments:
+        rows: CSV data in the following format (first column may be a
+            header):
+            [
+                [row1_colum1, row1_colum2, ...],
+                ...
+            ]
+        csv_name: Name of the resulting CSV
+        course_id: ID of the course
+    """
+    report_store = ReportStore.from_config()
+    report_store.store_rows(
+        course_id,
+        u"{course_prefix}_{csv_name}_{timestamp_str}.csv".format(
+            course_prefix=course_filename_prefix_generator(course_id),
+            csv_name=csv_name,
+            timestamp_str=timestamp.strftime("%Y-%m-%d-%H%M")
+        ),
+        rows
+    )
+
+
+def upload_grades_csv(_xmodule_instance_args, _entry_id, course_id, _task_input, action_name):
     """
     For a given `course_id`, generate a grades CSV file for all students that
     are enrolled, and store using a `ReportStore`. Once created, the files can
@@ -483,45 +541,26 @@ def push_grades_to_s3(_xmodule_instance_args, _entry_id, course_id, _task_input,
     make a more general CSVDoc class instead of building out the rows like we
     do here.
     """
-    start_time = datetime.now(UTC)
+    start_time = time()
+    start_date = datetime.now(UTC)
     status_interval = 100
-
     enrolled_students = CourseEnrollment.users_enrolled_in(course_id)
-    num_total = enrolled_students.count()
-    num_attempted = 0
-    num_succeeded = 0
-    num_failed = 0
-    curr_step = "Calculating Grades"
-
-    def update_task_progress():
-        """Return a dict containing info about current task"""
-        current_time = datetime.now(UTC)
-        progress = {
-            'action_name': action_name,
-            'attempted': num_attempted,
-            'succeeded': num_succeeded,
-            'failed': num_failed,
-            'total': num_total,
-            'duration_ms': int((current_time - start_time).total_seconds() * 1000),
-            'step': curr_step,
-        }
-        _get_current_task().update_state(state=PROGRESS, meta=progress)
-
-        return progress
+    task_progress = TaskProgress(action_name, enrolled_students.count(), start_time)
 
     # Loop over all our students and build our CSV lists in memory
     header = None
     rows = []
     err_rows = [["id", "username", "error_msg"]]
+    current_step = {'step': 'Calculating Grades'}
     for student, gradeset, err_msg in iterate_grades_for(course_id, enrolled_students):
         # Periodically update task status (this is a cache write)
-        if num_attempted % status_interval == 0:
-            update_task_progress()
-        num_attempted += 1
+        if task_progress.attempted % status_interval == 0:
+            task_progress.update_task_state(extra_meta=current_step)
+        task_progress.attempted += 1
 
         if gradeset:
             # We were able to successfully grade this student for this course.
-            num_succeeded += 1
+            task_progress.succeeded += 1
             if not header:
                 # Encode the header row in utf-8 encoding in case there are unicode characters
                 header = [section['label'].encode('utf-8') for section in gradeset[u'section_breakdown']]
@@ -543,32 +582,135 @@ def push_grades_to_s3(_xmodule_instance_args, _entry_id, course_id, _task_input,
             rows.append([student.id, student.email, student.username, gradeset['percent']] + row_percents)
         else:
             # An empty gradeset means we failed to grade a student.
-            num_failed += 1
+            task_progress.failed += 1
             err_rows.append([student.id, student.username, err_msg])
 
     # By this point, we've got the rows we're going to stuff into our CSV files.
-    curr_step = "Uploading CSVs"
-    update_task_progress()
-
-    # Generate parts of the file name
-    timestamp_str = start_time.strftime("%Y-%m-%d-%H%M")
-    course_id_prefix = urllib.quote(course_id.replace("/", "_"))
+    current_step = {'step': 'Uploading CSVs'}
+    task_progress.update_task_state(extra_meta=current_step)
 
     # Perform the actual upload
-    report_store = ReportStore.from_config()
-    report_store.store_rows(
-        course_id,
-        u"{}_grade_report_{}.csv".format(course_id_prefix, timestamp_str),
-        rows
-    )
+    upload_csv_to_report_store(rows, 'grade_report', course_id, start_date)
 
     # If there are any error rows (don't count the header), write them out as well
     if len(err_rows) > 1:
-        report_store.store_rows(
-            course_id,
-            u"{}_grade_report_{}_err.csv".format(course_id_prefix, timestamp_str),
-            err_rows
-        )
+        upload_csv_to_report_store(err_rows, 'grade_report_err', course_id, start_date)
 
     # One last update before we close out...
-    return update_task_progress()
+    return task_progress.update_task_state(extra_meta=current_step)
+
+
+def upload_students_csv(_xmodule_instance_args, _entry_id, course_id, task_input, action_name):
+    """
+    For a given `course_id`, generate a CSV file containing profile
+    information for all students that are enrolled, and store using a
+    `ReportStore`.
+    """
+    start_time = time()
+    start_date = datetime.now(UTC)
+    task_progress = TaskProgress(action_name, CourseEnrollment.num_enrolled_in(course_id), start_time)
+    current_step = {'step': 'Calculating Profile Info'}
+    task_progress.update_task_state(extra_meta=current_step)
+
+    # compute the student features table and format it
+    query_features = task_input.get('features')
+    student_data = enrolled_students_features(course_id, query_features)
+    header, rows = format_dictlist(student_data, query_features)
+
+    task_progress.attempted = task_progress.succeeded = len(rows)
+    task_progress.skipped = task_progress.total - task_progress.attempted
+
+    rows.insert(0, header)
+
+    current_step = {'step': 'Uploading CSV'}
+    task_progress.update_task_state(extra_meta=current_step)
+
+    # Perform the upload
+    upload_csv_to_report_store(rows, 'student_profile_info', course_id, start_date)
+
+    return task_progress.update_task_state(extra_meta=current_step)
+
+
+def cohort_students_and_upload(_xmodule_instance_args, _entry_id, course_id, task_input, action_name):
+    """
+    Within a given course, cohort students in bulk, then upload the results
+    using a `ReportStore`.
+    """
+    start_time = time()
+    start_date = datetime.now(UTC)
+
+    # Iterate through rows to get total assignments for task progress
+    with DefaultStorage().open(task_input['file_name']) as f:
+        total_assignments = 0
+        for _line in unicodecsv.DictReader(UniversalNewlineIterator(f)):
+            total_assignments += 1
+
+    task_progress = TaskProgress(action_name, total_assignments, start_time)
+    current_step = {'step': 'Cohorting Students'}
+    task_progress.update_task_state(extra_meta=current_step)
+
+    # cohorts_status is a mapping from cohort_name to metadata about
+    # that cohort.  The metadata will include information about users
+    # successfully added to the cohort, users not found, and a cached
+    # reference to the corresponding cohort object to prevent
+    # redundant cohort queries.
+    cohorts_status = {}
+
+    with DefaultStorage().open(task_input['file_name']) as f:
+        for row in unicodecsv.DictReader(UniversalNewlineIterator(f), encoding='utf-8'):
+            # Try to use the 'email' field to identify the user.  If it's not present, use 'username'.
+            username_or_email = row.get('email') or row.get('username')
+            cohort_name = row.get('cohort') or ''
+            task_progress.attempted += 1
+
+            if not cohorts_status.get(cohort_name):
+                cohorts_status[cohort_name] = {
+                    'Cohort Name': cohort_name,
+                    'Students Added': 0,
+                    'Students Not Found': set()
+                }
+                try:
+                    cohorts_status[cohort_name]['cohort'] = CourseUserGroup.objects.get(
+                        course_id=course_id,
+                        group_type=CourseUserGroup.COHORT,
+                        name=cohort_name
+                    )
+                    cohorts_status[cohort_name]["Exists"] = True
+                except CourseUserGroup.DoesNotExist:
+                    cohorts_status[cohort_name]["Exists"] = False
+
+            if not cohorts_status[cohort_name]['Exists']:
+                task_progress.failed += 1
+                continue
+
+            try:
+                with transaction.commit_on_success():
+                    add_user_to_cohort(cohorts_status[cohort_name]['cohort'], username_or_email)
+                cohorts_status[cohort_name]['Students Added'] += 1
+                task_progress.succeeded += 1
+            except User.DoesNotExist:
+                cohorts_status[cohort_name]['Students Not Found'].add(username_or_email)
+                task_progress.failed += 1
+            except ValueError:
+                # Raised when the user is already in the given cohort
+                task_progress.skipped += 1
+
+            task_progress.update_task_state(extra_meta=current_step)
+
+    current_step['step'] = 'Uploading CSV'
+    task_progress.update_task_state(extra_meta=current_step)
+
+    # Filter the output of `add_users_to_cohorts` in order to upload the result.
+    output_header = ['Cohort Name', 'Exists', 'Students Added', 'Students Not Found']
+    output_rows = [
+        [
+            ','.join(status_dict.get(column_name, '')) if column_name == 'Students Not Found'
+            else status_dict[column_name]
+            for column_name in output_header
+        ]
+        for _cohort_name, status_dict in cohorts_status.iteritems()
+    ]
+    output_rows.insert(0, output_header)
+    upload_csv_to_report_store(output_rows, 'cohort_results', course_id, start_date)
+
+    return task_progress.update_task_state(extra_meta=current_step)

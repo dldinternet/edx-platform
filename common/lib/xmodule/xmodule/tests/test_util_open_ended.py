@@ -1,6 +1,5 @@
 import json
 from textwrap import dedent
-from xmodule.modulestore import Location
 from xmodule.modulestore.xml import XMLModuleStore
 from xmodule.tests import DATA_DIR, get_test_system
 
@@ -20,6 +19,7 @@ S3_INTERFACE = {
     'secret_access_key': "",
     "storage_bucket_name": "",
 }
+
 
 class MockS3Key(object):
     """
@@ -92,13 +92,11 @@ class DummyModulestore(object):
         courses = self.modulestore.get_courses()
         return courses[0]
 
-    def get_module_from_location(self, location, course):
-        course = self.get_course(course)
-        if not isinstance(location, Location):
-            location = Location(location)
-        descriptor = self.modulestore.get_instance(course.id, location, depth=None)
+    def get_module_from_location(self, usage_key):
+        descriptor = self.modulestore.get_item(usage_key, depth=None)
         descriptor.xmodule_runtime = self.get_module_system(descriptor)
         return descriptor
+
 
 def serialize_child_history(task_state):
     """
@@ -110,6 +108,7 @@ def serialize_child_history(task_state):
             if "feedback" in attempt["post_assessment"]:
                 attempt["post_assessment"]["feedback"] = json.dumps(attempt["post_assessment"].get("feedback"))
             task_state["child_history"][i]["post_assessment"] = json.dumps(attempt["post_assessment"])
+
 
 def serialize_open_ended_instance_state(json_str):
     """

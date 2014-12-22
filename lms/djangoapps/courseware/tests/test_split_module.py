@@ -5,18 +5,17 @@ from django.core.urlresolvers import reverse
 from django.test.utils import override_settings
 from mock import MagicMock
 
-from student.tests.factories import UserFactory, CourseEnrollmentFactory
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 from courseware.module_render import get_module_for_descriptor
 from courseware.model_data import FieldDataCache
+from student.tests.factories import UserFactory, CourseEnrollmentFactory
 from xmodule.modulestore.tests.factories import ItemFactory, CourseFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
-
 from xmodule.partitions.partitions import Group, UserPartition
-from user_api.tests.factories import UserCourseTagFactory
+from openedx.core.djangoapps.user_api.tests.factories import UserCourseTagFactory
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class SplitTestBase(ModuleStoreTestCase):
     """
     Sets up a basic course and user for split test testing.
@@ -113,11 +112,10 @@ class SplitTestBase(ModuleStoreTestCase):
 
         resp = self.client.get(reverse(
             'courseware_section',
-            kwargs={'course_id': self.course.id,
+            kwargs={'course_id': self.course.id.to_deprecated_string(),
                     'chapter': self.chapter.url_name,
                     'section': self.sequential.url_name}
         ))
-
         content = resp.content
 
         # Assert we see the proper icon in the top display
@@ -176,15 +174,15 @@ class TestVertSplitTestVert(SplitTestBase):
             display_name="Split test vertical",
         )
         # pylint: disable=protected-access
-        c0_url = self.course.location._replace(category="vertical", name="split_test_cond0")
-        c1_url = self.course.location._replace(category="vertical", name="split_test_cond1")
+        c0_url = self.course.id.make_usage_key("vertical", "split_test_cond0")
+        c1_url = self.course.id.make_usage_key("vertical", "split_test_cond1")
 
         split_test = ItemFactory.create(
             parent_location=vert1.location,
             category="split_test",
             display_name="Split test",
             user_partition_id='0',
-            group_id_to_child={"0": c0_url.url(), "1": c1_url.url()},
+            group_id_to_child={"0": c0_url, "1": c1_url},
         )
 
         cond0vert = ItemFactory.create(
@@ -242,15 +240,15 @@ class TestSplitTestVert(SplitTestBase):
         # split_test cond 0 = vert <- {video, problem}
         # split_test cond 1 = vert <- {video, html}
         # pylint: disable=protected-access
-        c0_url = self.course.location._replace(category="vertical", name="split_test_cond0")
-        c1_url = self.course.location._replace(category="vertical", name="split_test_cond1")
+        c0_url = self.course.id.make_usage_key("vertical", "split_test_cond0")
+        c1_url = self.course.id.make_usage_key("vertical", "split_test_cond1")
 
         split_test = ItemFactory.create(
             parent_location=self.sequential.location,
             category="split_test",
             display_name="Split test",
             user_partition_id='0',
-            group_id_to_child={"0": c0_url.url(), "1": c1_url.url()},
+            group_id_to_child={"0": c0_url, "1": c1_url},
         )
 
         cond0vert = ItemFactory.create(
@@ -272,7 +270,7 @@ class TestSplitTestVert(SplitTestBase):
         html1 = self._html(cond1vert, 1)
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class SplitTestPosition(ModuleStoreTestCase):
     """
     Check that we can change positions in a course with partitions defined

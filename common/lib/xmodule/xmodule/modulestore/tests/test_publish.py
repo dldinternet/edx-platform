@@ -1,189 +1,145 @@
 """
-Test the publish code (primary causing orphans)
+Test the publish code (mostly testing that publishing doesn't result in orphans)
 """
-import uuid
-import mock
-import unittest
-import datetime
-import random
+from nose.plugins.attrib import attr
 
-from xmodule.modulestore.inheritance import InheritanceMixin
-from xmodule.modulestore.mongo import MongoModuleStore, DraftMongoModuleStore
-from xmodule.modulestore import Location
-from xmodule.fields import Date
+from xmodule.modulestore import ModuleStoreEnum
 from xmodule.modulestore.exceptions import ItemNotFoundError
-from xmodule.modulestore.mongo.draft import DIRECT_ONLY_CATEGORIES
+from xmodule.modulestore.tests.test_split_w_old_mongo import SplitWMongoCourseBoostrapper
+from xmodule.modulestore.tests.factories import check_mongo_calls, mongo_uses_error_check
 
 
-class TestPublish(unittest.TestCase):
+@attr('mongo')
+class TestPublish(SplitWMongoCourseBoostrapper):
     """
     Test the publish code (primary causing orphans)
     """
-
-    # Snippet of what would be in the django settings envs file
-    db_config = {
-        'host': 'localhost',
-        'db': 'test_xmodule',
-    }
-
-    modulestore_options = {
-        'default_class': 'xmodule.raw_module.RawDescriptor',
-        'fs_root': '',
-        'render_template': mock.Mock(return_value=""),
-        'xblock_mixins': (InheritanceMixin,)
-    }
-
-    def setUp(self):
-        self.db_config['collection'] = 'modulestore{0}'.format(uuid.uuid4().hex[:5])
-
-        self.old_mongo = MongoModuleStore(self.db_config, **self.modulestore_options)
-        self.draft_mongo = DraftMongoModuleStore(self.db_config, **self.modulestore_options)
-        self.addCleanup(self.tear_down_mongo)
-        self.course_location = None
-
-    def tear_down_mongo(self):
-        # old_mongo doesn't give a db attr, but all of the dbs are the same and draft and pub use same collection
-        dbref = self.old_mongo.collection.database
-        dbref.drop_collection(self.old_mongo.collection)
-        dbref.connection.close()
-
-    def _create_item(self, category, name, data, metadata, parent_category, parent_name, runtime):
-        """
-        Create the item in either draft or direct based on category and attach to its parent.
-        """
-        location = self.course_location.replace(category=category, name=name)
-        if category in DIRECT_ONLY_CATEGORIES:
-            mongo = self.old_mongo
-        else:
-            mongo = self.draft_mongo
-        mongo.create_and_save_xmodule(location, data, metadata, runtime)
-        if isinstance(data, basestring):
-            fields = {'data': data}
-        else:
-            fields = data.copy()
-        fields.update(metadata)
-        if parent_name:
-            # add child to parent in mongo
-            parent_location = self.course_location.replace(category=parent_category, name=parent_name)
-            parent = self.draft_mongo.get_item(parent_location)
-            parent.children.append(location.url())
-            if parent_category in DIRECT_ONLY_CATEGORIES:
-                mongo = self.old_mongo
-            else:
-                mongo = self.draft_mongo
-            mongo.update_item(parent, '**replace_user**')
-
     def _create_course(self):
         """
         Create the course, publish all verticals
         * some detached items
         """
-        date_proxy = Date()
-        metadata = {
-            'start': date_proxy.to_json(datetime.datetime(2000, 3, 13, 4)),
-            'display_name': 'Migration test course',
-        }
-        data = {
-            'wiki_slug': 'test_course_slug'
-        }
-        fields = metadata.copy()
-        fields.update(data)
+        # There are 12 created items and 7 parent updates
+        # create course: finds: 1 to verify uniqueness, 1 to find parents
+        # sends: 1 to create course, 1 to create overview
+        with check_mongo_calls(5, 2):
+            super(TestPublish, self)._create_course(split=False)  # 2 inserts (course and overview)
 
-        self.course_location = Location('i4x', 'test_org', 'test_course', 'course', 'runid')
-        self.old_mongo.create_and_save_xmodule(self.course_location, data, metadata)
-        runtime = self.draft_mongo.get_item(self.course_location).runtime
+        # with bulk will delay all inheritance computations which won't be added into the mongo_calls
+        with self.draft_mongo.bulk_operations(self.old_course_key):
+            # finds: 1 for parent to add child and 2 to get ancestors
+            # sends: 1 for insert, 1 for parent (add child)
+            with check_mongo_calls(3, 2):
+                self._create_item('chapter', 'Chapter1', {}, {'display_name': 'Chapter 1'}, 'course', 'runid', split=False)
 
-        self._create_item('chapter', 'Chapter1', {}, {'display_name': 'Chapter 1'}, 'course', 'runid', runtime)
-        self._create_item('chapter', 'Chapter2', {}, {'display_name': 'Chapter 2'}, 'course', 'runid', runtime)
-        self._create_item('vertical', 'Vert1', {}, {'display_name': 'Vertical 1'}, 'chapter', 'Chapter1', runtime)
-        self._create_item('vertical', 'Vert2', {}, {'display_name': 'Vertical 2'}, 'chapter', 'Chapter1', runtime)
-        self._create_item('html', 'Html1', "<p>Goodbye</p>", {'display_name': 'Parented Html'}, 'vertical', 'Vert1', runtime)
-        self._create_item(
-            'discussion', 'Discussion1',
-            "discussion discussion_category=\"Lecture 1\" discussion_id=\"a08bfd89b2aa40fa81f2c650a9332846\" discussion_target=\"Lecture 1\"/>\n",
-            {
-                "discussion_category": "Lecture 1",
-                "discussion_target": "Lecture 1",
-                "display_name": "Lecture 1 Discussion",
-                "discussion_id": "a08bfd89b2aa40fa81f2c650a9332846"
-            },
-            'vertical', 'Vert1', runtime
-        )
-        self._create_item('html', 'Html2', "<p>Hellow</p>", {'display_name': 'Hollow Html'}, 'vertical', 'Vert1', runtime)
-        self._create_item(
-            'discussion', 'Discussion2',
-            "discussion discussion_category=\"Lecture 2\" discussion_id=\"b08bfd89b2aa40fa81f2c650a9332846\" discussion_target=\"Lecture 2\"/>\n",
-            {
-                "discussion_category": "Lecture 2",
-                "discussion_target": "Lecture 2",
-                "display_name": "Lecture 2 Discussion",
-                "discussion_id": "b08bfd89b2aa40fa81f2c650a9332846"
-            },
-            'vertical', 'Vert2', runtime
-        )
-        self._create_item('static_tab', 'staticuno', "<p>tab</p>", {'display_name': 'Tab uno'}, None, None, runtime)
-        self._create_item('about', 'overview', "<p>overview</p>", {}, None, None, runtime)
-        self._create_item('course_info', 'updates', "<ol><li><h2>Sep 22</h2><p>test</p></li></ol>", {}, None, None, runtime)
+            with check_mongo_calls(4, 2):
+                self._create_item('chapter', 'Chapter2', {}, {'display_name': 'Chapter 2'}, 'course', 'runid', split=False)
+            # For each vertical (2) created:
+            #   - load draft
+            #   - load non-draft
+            #   - get last error
+            #   - load parent
+            #   - get ancestors
+            #   - load inheritable data
+            with check_mongo_calls(15, 6):
+                self._create_item('vertical', 'Vert1', {}, {'display_name': 'Vertical 1'}, 'chapter', 'Chapter1', split=False)
+                self._create_item('vertical', 'Vert2', {}, {'display_name': 'Vertical 2'}, 'chapter', 'Chapter1', split=False)
+            # For each (4) item created
+            #   - try to find draft
+            #   - try to find non-draft
+            #   - retrieve draft of new parent
+            #   - get last error
+            #   - load parent
+            #   - load inheritable data
+            #   - load parent
+            #   - load ancestors
+            # count for updates increased to 16 b/c of edit_info updating
+            with check_mongo_calls(40, 16):
+                self._create_item('html', 'Html1', "<p>Goodbye</p>", {'display_name': 'Parented Html'}, 'vertical', 'Vert1', split=False)
+                self._create_item(
+                    'discussion', 'Discussion1',
+                    "discussion discussion_category=\"Lecture 1\" discussion_id=\"a08bfd89b2aa40fa81f2c650a9332846\" discussion_target=\"Lecture 1\"/>\n",
+                    {
+                        "discussion_category": "Lecture 1",
+                        "discussion_target": "Lecture 1",
+                        "display_name": "Lecture 1 Discussion",
+                        "discussion_id": "a08bfd89b2aa40fa81f2c650a9332846"
+                    },
+                    'vertical', 'Vert1',
+                    split=False
+                )
+                self._create_item('html', 'Html2', "<p>Hello</p>", {'display_name': 'Hollow Html'}, 'vertical', 'Vert1', split=False)
+                self._create_item(
+                    'discussion', 'Discussion2',
+                    "discussion discussion_category=\"Lecture 2\" discussion_id=\"b08bfd89b2aa40fa81f2c650a9332846\" discussion_target=\"Lecture 2\"/>\n",
+                    {
+                        "discussion_category": "Lecture 2",
+                        "discussion_target": "Lecture 2",
+                        "display_name": "Lecture 2 Discussion",
+                        "discussion_id": "b08bfd89b2aa40fa81f2c650a9332846"
+                    },
+                    'vertical', 'Vert2',
+                    split=False
+                )
 
-    def _xmodule_recurse(self, item, action):
-        """
-        Applies action depth-first down tree and to item last.
-
-        A copy of  cms.djangoapps.contentstore.views.helpers._xmodule_recurse to reproduce its use and behavior
-        outside of django.
-        """
-        for child in item.get_children():
-            self._xmodule_recurse(child, action)
-
-        action(item)
+            with check_mongo_calls(2, 2):
+                # 2 finds b/c looking for non-existent parents
+                self._create_item('static_tab', 'staticuno', "<p>tab</p>", {'display_name': 'Tab uno'}, None, None, split=False)
+                self._create_item('course_info', 'updates', "<ol><li><h2>Sep 22</h2><p>test</p></li></ol>", {}, None, None, split=False)
 
     def test_publish_draft_delete(self):
         """
         To reproduce a bug (STUD-811) publish a vertical, convert to draft, delete a child, move a child, publish.
         See if deleted and moved children still is connected or exists in db (bug was disconnected but existed)
         """
-        self._create_course()
-        userid = random.getrandbits(32)
-        location = self.course_location.replace(category='vertical', name='Vert1')
-        item = self.draft_mongo.get_item(location, 2)
-        self._xmodule_recurse(
-            item,
-            lambda i: self.draft_mongo.publish(i.location, userid)
-        )
+        vert_location = self.old_course_key.make_usage_key('vertical', block_id='Vert1')
+        item = self.draft_mongo.get_item(vert_location, 2)
+        # Finds:
+        #   1 get draft vert,
+        #   2-10 for each child: (3 children x 3 queries each)
+        #      get draft and then published child
+        #      compute inheritance
+        #   11 get published vert
+        #   12-15 get each ancestor (count then get): (2 x 2),
+        #   16 then fail count of course parent (1)
+        #   17 compute inheritance
+        #   18-19 get draft and published vert
+        # Sends:
+        #   delete the subtree of drafts (1 call),
+        #   update the published version of each node in subtree (4 calls),
+        #   update the ancestors up to course (2 calls)
+        if mongo_uses_error_check(self.draft_mongo):
+            max_find = 20
+        else:
+            max_find = 19
+        with check_mongo_calls(max_find, 7):
+            self.draft_mongo.publish(item.location, self.user_id)
+
         # verify status
-        item = self.draft_mongo.get_item(location, 0)
+        item = self.draft_mongo.get_item(vert_location, 0)
         self.assertFalse(getattr(item, 'is_draft', False), "Item was published. Draft should not exist")
         # however, children are still draft, but I'm not sure that's by design
 
-        # convert back to draft
-        self.draft_mongo.convert_to_draft(location)
-        # both draft and published should exist
-        draft_vert = self.draft_mongo.get_item(location, 0)
-        self.assertTrue(getattr(draft_vert, 'is_draft', False), "Item was converted to draft but doesn't say so")
-        item = self.old_mongo.get_item(location, 0)
-        self.assertFalse(getattr(item, 'is_draft', False), "Published item doesn't say so")
+        # delete the draft version of the discussion
+        location = self.old_course_key.make_usage_key('discussion', block_id='Discussion1')
+        self.draft_mongo.delete_item(location, self.user_id)
 
-        # delete the discussion (which oddly is not in draft mode)
-        location = self.course_location.replace(category='discussion', name='Discussion1')
-        self.draft_mongo.delete_item(location)
-        # remove pointer from draft vertical (verify presence first to ensure process is valid)
-        self.assertIn(location.url(), draft_vert.children)
-        draft_vert.children.remove(location.url())
+        draft_vert = self.draft_mongo.get_item(vert_location, 0)
+        self.assertTrue(getattr(draft_vert, 'is_draft', False), "Deletion didn't convert parent to draft")
+        self.assertNotIn(location, draft_vert.children)
         # move the other child
-        other_child_loc = self.course_location.replace(category='html', name='Html2')
-        draft_vert.children.remove(other_child_loc.url())
-        other_vert = self.draft_mongo.get_item(self.course_location.replace(category='vertical', name='Vert2'), 0)
-        other_vert.children.append(other_child_loc.url())
-        self.draft_mongo.update_item(draft_vert, '**replace_user**')
-        self.draft_mongo.update_item(other_vert, '**replace_user**')
+        other_child_loc = self.old_course_key.make_usage_key('html', block_id='Html2')
+        draft_vert.children.remove(other_child_loc)
+        other_vert = self.draft_mongo.get_item(self.old_course_key.make_usage_key('vertical', block_id='Vert2'), 0)
+        other_vert.children.append(other_child_loc)
+        self.draft_mongo.update_item(draft_vert, self.user_id)
+        self.draft_mongo.update_item(other_vert, self.user_id)
         # publish
-        self._xmodule_recurse(
-            draft_vert,
-            lambda i: self.draft_mongo.publish(i.location, userid)
-        )
-        item = self.old_mongo.get_item(draft_vert.location, 0)
-        self.assertNotIn(location.url(), item.children)
+        self.draft_mongo.publish(vert_location, self.user_id)
+        item = self.draft_mongo.get_item(draft_vert.location, revision=ModuleStoreEnum.RevisionOption.published_only)
+        self.assertNotIn(location, item.children)
+        self.assertIsNone(self.draft_mongo.get_parent_location(location))
         with self.assertRaises(ItemNotFoundError):
             self.draft_mongo.get_item(location)
-        self.assertNotIn(other_child_loc.url(), item.children)
-        self.assertTrue(self.draft_mongo.has_item(None, other_child_loc), "Oops, lost moved item")
+        self.assertNotIn(other_child_loc, item.children)
+        self.assertTrue(self.draft_mongo.has_item(other_child_loc), "Oops, lost moved item")

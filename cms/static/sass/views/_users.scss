@@ -6,16 +6,14 @@
   // LAYOUT: page
   .content-primary, .content-supplementary {
     @include box-sizing(border-box);
-    float: left;
   }
 
   .content-primary {
-    width: flex-grid(9, 12);
-    margin-right: flex-gutter();
+    @extend .ui-col-wide;
   }
 
   .content-supplementary {
-    width: flex-grid(3, 12);
+    @extend .ui-col-narrow;
   }
 
   // ELEM: content
@@ -55,8 +53,7 @@
         }
 
         .action-primary {
-          @include green-button(); // overwriting for the sake of syncing older green button styles for now
-          @extend %t-action3;
+          @extend %btn-primary-green;
           padding: ($baseline/2) $baseline;
         }
       }
@@ -102,9 +99,9 @@
         color: $white;
 
         .msg-you {
+          @extend %t-strong;
           margin-left: ($baseline/5);
           text-transform: none;
-          font-weight: 500;
           color: $pink-l3;
         }
 
@@ -124,7 +121,7 @@
       // ELEM: item - metadata
       .item-metadata {
         width: flex-grid(5, 9);
-        margin-right: flex-gutter();
+        @include margin-right(flex-gutter());
 
         .user-username, .user-email {
           display: inline-block;
@@ -132,11 +129,11 @@
         }
 
         .user-username {
-          @extend %t-title4;
           @include transition(color $tmg-f2 ease-in-out 0s);
-          margin: 0 ($baseline/2) ($baseline/10) 0;
+          @extend %t-title4;
+          @extend %t-strong;
+          @include margin(0, ($baseline/2), ($baseline/10), 0);
           color: $gray-d4;
-          font-weight: 600;
         }
 
         .user-email {
@@ -187,20 +184,20 @@
 
           &.add-admin-role {
             @include blue-button;
-            @extend %t-action2;
             @include transition(all .15s);
+            @extend %t-action2;
+            @extend %t-strong;
             display: inline-block;
             padding: ($baseline/5) $baseline;
-            font-weight: 600;
           }
 
           &.remove-admin-role {
             @include grey-button;
-            @extend %t-action2;
             @include transition(all .15s);
+            @extend %t-action2;
+            @extend %t-strong;
             display: inline-block;
             padding: ($baseline/5) $baseline;
-            font-weight: 600;
           }
         }
 

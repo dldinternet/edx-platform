@@ -10,11 +10,11 @@ from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
 
 from courseware.tests.factories import InstructorFactory
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 from course_wiki.views import get_or_create_root
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestWikiAccessMiddleware(ModuleStoreTestCase):
     """Tests for WikiAccessMiddleware."""
 
@@ -23,7 +23,7 @@ class TestWikiAccessMiddleware(ModuleStoreTestCase):
         self.wiki = get_or_create_root()
 
         self.course_math101 = CourseFactory.create(org='edx', number='math101', display_name='2014', metadata={'use_unique_wiki_id': 'false'})
-        self.course_math101_instructor = InstructorFactory(course=self.course_math101.location, username='instructor', password='secret')
+        self.course_math101_instructor = InstructorFactory(course_key=self.course_math101.id, username='instructor', password='secret')
         self.wiki_math101 = URLPath.create_article(self.wiki, 'math101', title='math101')
 
         self.client = Client()

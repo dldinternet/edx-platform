@@ -62,6 +62,7 @@ Write a persuasive essay to a newspaper reflecting your views on censorship in l
       $(@element.find('.xml-box')).hide()
     else
       @createXMLEditor()
+      @xml_editor.display.wrapper.className += " CodeMirror-advanced";
 
     @alertTaskRubricModification()
 
@@ -87,8 +88,12 @@ Write a persuasive essay to a newspaper reflecting your views on censorship in l
   ###
   onShowXMLButton: (e) =>
     e.preventDefault();
+    if @cheatsheet && @cheatsheet.hasClass('shown')
+      @cheatsheet.toggleClass('shown')
+      @toggleCheatsheetVisibility()
     if @confirmConversionToXml()
       @createXMLEditor(OpenEndedMarkdownEditingDescriptor.markdownToXml(@markdown_editor.getValue()))
+      @xml_editor.display.wrapper.className += " CodeMirror-advanced";
       # Need to refresh to get line numbers to display properly (and put cursor position to 0)
       @xml_editor.setCursor(0)
       @xml_editor.refresh()
@@ -131,7 +136,17 @@ Write a persuasive essay to a newspaper reflecting your views on censorship in l
       @cheatsheet = $($('#simple-editor-open-ended-cheatsheet').html())
       $(@markdown_editor.getWrapperElement()).append(@cheatsheet)
 
+    @toggleCheatsheetVisibility()
+
     setTimeout (=> @cheatsheet.toggleClass('shown')), 10
+
+
+  ###
+  Function to toggle cheatsheet visibility.
+  ###
+  toggleCheatsheetVisibility: () =>
+    $('.modal-content').toggleClass('cheatsheet-is-shown')
+
 
   ###
   Stores the current editor and hides the one that is not displayed.

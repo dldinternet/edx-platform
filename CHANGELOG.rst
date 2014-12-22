@@ -5,14 +5,99 @@ These are notable changes in edx-platform.  This is a rolling list of changes,
 in roughly chronological order, most recent first.  Add your entries at or near
 the top.  Include a label indicating the component affected.
 
+Platform: Add group_access field to all xblocks.  TNL-670
+
+LMS: Add support for user partitioning based on cohort.  TNL-710
+
+Platform: Add base support for cohorted group configurations.  TNL-649
+
+LMS: Support assigning students to cohorts via a CSV file upload. TNL-735
+
+Common: Add configurable reset button to units
+
+Studio: Add support xblock validation messages on Studio unit/container page. TNL-683
+
+LMS: Support adding cohorts from the instructor dashboard. TNL-162
+
+LMS: Support adding students to a cohort via the instructor dashboard. TNL-163
+
+LMS: Show cohorts on the new instructor dashboard. TNL-161
+
+LMS: Mobile API available for courses that opt in using the Course Advanced
+Setting "Mobile Course Available" (only used in limited closed beta).
+
+Studio: Video Module now has an optional advanced setting "EdX Video ID" for
+courses where assets are managed entirely by the video team. This is optional
+and opt-in (only used in a limited closed beta for now).
+
+LMS: Do not allow individual due dates to be earlier than the normal due date. LMS-6563
+
+Blades: Course teams can turn off Chinese Caching from Studio. BLD-1207
+
+LMS: Instructors can request and see content of previous bulk emails sent in the instructor dashboard.
+
+Studio: New course outline and unit/container pages with revised publishing model. STUD-1790 (part 1)
+
+Studio: Backbone version of the course outline page. STUD-1726.
+
+Studio: New advanced setting "invitation_only" for courses. This setting overrides the enrollment start/end dates
+  if set. LMS-2670
+
+LMS: Register button on About page was active even when greyed out. Now made inactive when appropriate and
+displays appropriate context sensitive message to student. LMS-2717
+
+Blades: Redirect Chinese students to a Chinese CDN for video. BLD-1052.
+
+Studio: Show display names and help text in Advanced Settings. Also hide deprecated settings
+by default.
+
+Studio: Move Peer Assessment into advanced problems menu.
+
+Studio: Support creation and editing of split_test instances (Content Experiments)
+entirely in Studio. STUD-1658.
+
+Blades: Add context-aware video index. BLD-933
+
+Blades: Fix bug with incorrect link format and redirection. BLD-1049
+
+Blades: Fix bug with incorrect RelativeTime value after XML serialization. BLD-1060
+
+LMS: Update bulk email implementation to lessen load on the database
+by consolidating chunked queries for recipients into a single query.
+
+Blades: Fix link to javascript file in ChoiceTextResponse. BLD-1103.
+
+All: refactored code to handle course_ids, module_ids, etc in a cleaner way.
+See https://github.com/edx/edx-platform/wiki/Opaque-Keys for details.
+
+Blades: Remove Video player outline. BLD-975.
+
+Blades: Fix Youtube regular expression in video player editor. BLD-967.
+
+Studio: Support editing of containers. STUD-1312.
+
+Blades: Fix displaying transcripts on touch devices. BLD-1033.
+
+Blades: Tolerance expressed in percentage now computes correctly. BLD-522.
+
+Studio: Support add, delete and duplicate on the container page. STUD-1490.
+
 Studio: Add drag-and-drop support to the container page. STUD-1309.
 
 Common: Add extensible third-party auth module.
 
+Blades: Added new error message that displays when HTML5 video is not supported
+altogether. Make sure spinner gets hidden when error message is shown. BLD-638.
+
+LMS: Switch default instructor dashboard to the new (formerly "beta")
+  instructor dashboard. Puts the old (now "legacy") dash behind a feature flag.
+  LMS-1296
+
 Blades: Handle situation if no response were sent from XQueue to LMS in Matlab
 problem after Run Code button press. BLD-994.
 
-Blades: Set initial video quality to large instead of default to avoid automatic switch to HD when iframe resizes. BLD-981.
+Blades: Set initial video quality to large instead of default to avoid automatic
+switch to HD when iframe resizes. BLD-981.
 
 Blades: Add an upload button for authors to provide students with an option to
 download a handout associated with a video (of arbitrary file format). BLD-1000.
@@ -741,3 +826,5 @@ LMS: Option to email students when enroll/un-enroll them.
 
 Blades: Added WAI-ARIA markup to the video player controls. These are now fully
 accessible by screen readers.
+
+Common: Added advanced_module for annotating images to go with the ones for text and videos.

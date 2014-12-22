@@ -4,6 +4,10 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
         var XBlockView = BaseView.extend({
             // takes XBlockInfo as a model
 
+            events: {
+                "click .notification-action-button": "fireNotificationActionEvent"
+            },
+
             initialize: function() {
                 BaseView.prototype.initialize.call(this);
                 this.view = this.options.view;
@@ -17,6 +21,7 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
                 return $.ajax({
                     url: decodeURIComponent(xblockUrl) + "/" + view,
                     type: 'GET',
+                    cache: false,
                     headers: { Accept: 'application/json' },
                     success: function(fragment) {
                         self.handleXBlockFragment(fragment, options);
@@ -28,34 +33,58 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
                 var self = this,
                     wrapper = this.$el,
                     xblockElement,
-                    success = options ? options.success : null,
+                    successCallback = options ? options.success || options.done : null,
+                    errorCallback = options ? options.error || options.done : null,
                     xblock,
                     fragmentsRendered;
 
                 fragmentsRendered = this.renderXBlockFragment(fragment, wrapper);
-                fragmentsRendered.done(function() {
+                fragmentsRendered.always(function() {
                     xblockElement = self.$('.xblock').first();
-                    xblock = XBlock.initializeBlock(xblockElement);
-                    self.xblock = xblock;
-                    self.xblockReady(xblock);
-                    if (success) {
-                        success(xblock);
+                    try {
+                        xblock = XBlock.initializeBlock(xblockElement);
+                        self.xblock = xblock;
+                        self.xblockReady(xblock);
+                        if (successCallback) {
+                            successCallback(xblock);
+                        }
+                    } catch (e) {
+                        console.error(e.stack);
+                        // Add 'xblock-initialization-failed' class to every xblock
+                        self.$('.xblock').addClass('xblock-initialization-failed');
+
+                        // If the xblock was rendered but failed then still call xblockReady to allow
+                        // drag-and-drop to be initialized.
+                        if (xblockElement) {
+                            self.xblockReady(null);
+                        }
+                        if (errorCallback) {
+                            errorCallback();
+                        }
                     }
                 });
             },
 
             /**
-             * This method is called upon successful rendering of an xblock.
+             * Sends a notification event to the runtime, if one is available. Note that the runtime
+             * is only available once the xblock has been rendered and successfully initialized.
+             * @param eventName The name of the event to be fired.
+             * @param data The data to be passed to any listener's of the event.
              */
-            xblockReady: function(xblock) {
-                // Do nothing
+            notifyRuntime: function(eventName, data) {
+                var runtime = this.xblock && this.xblock.runtime;
+                if (runtime) {
+                    runtime.notify(eventName, data);
+                }
             },
 
             /**
-             * Returns true if the specified xblock has children.
+             * This method is called upon successful rendering of an xblock. Note that the xblock
+             * may have thrown JavaScript errors after rendering in which case the xblock parameter
+             * will be null.
              */
-            hasChildXBlocks: function() {
-                return this.$('.wrapper-xblock').length > 0;
+            xblockReady: function(xblock) {
+                // Do nothing
             },
 
             /**
@@ -66,7 +95,7 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
              * represents this process.
              * @param fragment The fragment returned from the xblock_handler
              * @param element The element into which to render the fragment (defaults to this.$el)
-             * @returns {*} A promise representing the rendering process
+             * @returns {jQuery promise} A promise representing the rendering process
              */
             renderXBlockFragment: function(fragment, element) {
                 var html = fragment.html,
@@ -74,17 +103,35 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
                 if (!element) {
                     element = this.$el;
                 }
-                // First render the HTML as the scripts might depend upon it
+
+                // Render the HTML first as the scripts might depend upon it, and then
+                // asynchronously add the resources to the page. Any errors that are thrown
+                // by included scripts are logged to the console but are then ignored assuming
+                // that at least the rendered HTML will be in place.
+                try {
+                    this.updateHtml(element, html);
+                    return this.addXBlockFragmentResources(resources);
+                } catch(e) {
+                    console.error(e.stack);
+                    return $.Deferred().resolve();
+                }
+            },
+
+            /**
+             * Updates an element to have the specified HTML. The default method sets the HTML
+             * as child content, but this can be overridden.
+             * @param element The element to be updated
+             * @param html The desired HTML.
+             */
+            updateHtml: function(element, html) {
                 element.html(html);
-                // Now asynchronously add the resources to the page
-                return this.addXBlockFragmentResources(resources);
             },
 
             /**
              * Dynamically loads all of an XBlock's dependent resources. This is an asynchronous
              * process so a promise is returned.
              * @param resources The resources to be rendered
-             * @returns {*} A promise representing the rendering process
+             * @returns {jQuery promise} A promise representing the rendering process
              */
             addXBlockFragmentResources: function(resources) {
                 var self = this,
@@ -94,7 +141,7 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
                 numResources = resources.length;
                 deferred = $.Deferred();
                 applyResource = function(index) {
-                    var hash, resource, head, value, promise;
+                    var hash, resource, value, promise;
                     if (index >= numResources) {
                         deferred.resolve();
                         return;
@@ -124,7 +171,7 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
             /**
              * Loads the specified resource into the page.
              * @param resource The resource to be loaded.
-             * @returns {*} A promise representing the loading of the resource.
+             * @returns {jQuery promise} A promise representing the loading of the resource.
              */
             loadResource: function(resource) {
                 var head = $('head'),
@@ -152,6 +199,14 @@ define(["jquery", "underscore", "js/views/baseview", "xblock/runtime.v1"],
                 }
                 // Return an already resolved promise for synchronous updates
                 return $.Deferred().resolve().promise();
+            },
+
+            fireNotificationActionEvent: function(event) {
+               var eventName = $(event.currentTarget).data("notification-action");
+               if (eventName) {
+                   event.preventDefault();
+                   this.notifyRuntime(eventName, this.model.get("id"));
+               }
             }
         });
 

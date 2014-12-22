@@ -96,7 +96,7 @@ class CombinedOpenEndedRubric(object):
         if not success:
             #This is a staff_facing_error
             error_message = "Could not parse rubric : {0} for location {1}. Contact the learning sciences group for assistance.".format(
-                rubric_string, location.url())
+                rubric_string, location.to_deprecated_string())
             log.error(error_message)
             raise RubricParsingError(error_message)
 
@@ -236,7 +236,7 @@ class CombinedOpenEndedRubric(object):
                             rubric_categories[i]['options'][j]['grader_types'].append(grader_type)
                             #Grab the score and add it to the actual scores.  J will be the score for the selected
                             #grader type
-                            if len(actual_scores)<=i:
+                            if len(actual_scores) <= i:
                                 #Initialize a new list in the list of lists
                                 actual_scores.append([j])
                             else:
@@ -249,7 +249,7 @@ class CombinedOpenEndedRubric(object):
         for (i, a) in enumerate(actual_scores):
             if int(a) == max_scores[i]:
                 correct.append(1)
-            elif int(a)==0:
+            elif int(a) == 0:
                 correct.append(0)
             else:
                 correct.append(.5)

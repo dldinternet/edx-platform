@@ -15,14 +15,19 @@ Contents:
     :maxdepth: 2
 
     change_log
+    preface.rst
+    browsers.rst
     overview.rst
     extending_platform/index
+    modulestores/index
     xblocks.rst
     pavelib.rst
     public_sandboxes.rst
     analytics.rst
     process/index
     testing/index
+    code-considerations
+    deploy-new-service
 
 APIs
 -----

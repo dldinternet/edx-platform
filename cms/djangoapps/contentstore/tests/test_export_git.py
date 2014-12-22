@@ -9,15 +9,12 @@ import subprocess
 from uuid import uuid4
 
 from django.conf import settings
-from django.core.urlresolvers import reverse
 from django.test.utils import override_settings
-from pymongo import MongoClient
 
 from .utils import CourseTestCase
 import contentstore.git_export_utils as git_export_utils
-from xmodule.contentstore.django import _CONTENTSTORE
 from xmodule.modulestore.django import modulestore
-from contentstore.utils import get_modulestore
+from contentstore.utils import reverse_course_url
 
 TEST_DATA_CONTENTSTORE = copy.deepcopy(settings.CONTENTSTORE)
 TEST_DATA_CONTENTSTORE['DOC_STORE_CONFIG']['db'] = 'test_xcontent_%s' % uuid4().hex
@@ -34,16 +31,30 @@ class TestExportGit(CourseTestCase):
         Setup test course, user, and url.
         """
         super(TestExportGit, self).setUp()
-        self.course_module = modulestore().get_item(self.course.location)
-        self.test_url = reverse('export_git', kwargs={
-            'org': self.course.location.org,
-            'course': self.course.location.course,
-            'name': self.course.location.name,
-        })
+        self.course_module = modulestore().get_course(self.course.id)
+        self.test_url = reverse_course_url('export_git', self.course.id)
 
-    def tearDown(self):
-        MongoClient().drop_database(TEST_DATA_CONTENTSTORE['DOC_STORE_CONFIG']['db'])
-        _CONTENTSTORE.clear()
+    def make_bare_repo_with_course(self, repo_name):
+        """
+        Make a local bare repo suitable for exporting to in
+        tests
+        """
+        # Build out local bare repo, and set course git url to it
+        repo_dir = os.path.abspath(git_export_utils.GIT_REPO_EXPORT_DIR)
+        os.mkdir(repo_dir)
+        self.addCleanup(shutil.rmtree, repo_dir)
+
+        bare_repo_dir = '{0}/{1}.git'.format(
+            os.path.abspath(git_export_utils.GIT_REPO_EXPORT_DIR),
+            repo_name
+        )
+        os.mkdir(bare_repo_dir)
+        self.addCleanup(shutil.rmtree, bare_repo_dir)
+
+        subprocess.check_output(['git', '--bare', 'init', ], cwd=bare_repo_dir)
+        self.populate_course()
+        self.course_module.giturl = 'file://{}'.format(bare_repo_dir)
+        modulestore().update_item(self.course_module, self.user.id)
 
     def test_giturl_missing(self):
         """
@@ -71,7 +82,7 @@ class TestExportGit(CourseTestCase):
         Test failed course export response.
         """
         self.course_module.giturl = 'foobar'
-        get_modulestore(self.course_module.location).update_item(self.course_module)
+        modulestore().update_item(self.course_module, self.user.id)
 
         response = self.client.get('{}?action=push'.format(self.test_url))
         self.assertIn('Export Failed:', response.content)
@@ -81,7 +92,7 @@ class TestExportGit(CourseTestCase):
         Regression test for making sure errors are properly stringified
         """
         self.course_module.giturl = 'foobar'
-        get_modulestore(self.course_module.location).update_item(self.course_module)
+        modulestore().update_item(self.course_module, self.user.id)
 
         response = self.client.get('{}?action=push'.format(self.test_url))
         self.assertNotIn('django.utils.functional.__proxy__', response.content)
@@ -90,21 +101,42 @@ class TestExportGit(CourseTestCase):
         """
         Test successful course export response.
         """
-        # Build out local bare repo, and set course git url to it
-        repo_dir = os.path.abspath(git_export_utils.GIT_REPO_EXPORT_DIR)
-        os.mkdir(repo_dir)
-        self.addCleanup(shutil.rmtree, repo_dir)
 
-        bare_repo_dir = '{0}/test_repo.git'.format(
-            os.path.abspath(git_export_utils.GIT_REPO_EXPORT_DIR))
-        os.mkdir(bare_repo_dir)
-        self.addCleanup(shutil.rmtree, bare_repo_dir)
-
-        subprocess.check_output(['git', '--bare', 'init', ], cwd=bare_repo_dir)
-
-        self.populate_course()
-        self.course_module.giturl = 'file://{}'.format(bare_repo_dir)
-        get_modulestore(self.course_module.location).update_item(self.course_module)
-
+        self.make_bare_repo_with_course('test_repo')
         response = self.client.get('{}?action=push'.format(self.test_url))
         self.assertIn('Export Succeeded', response.content)
+
+    def test_repo_with_dots(self):
+        """
+        Regression test for a bad directory pathing of repo's that have dots.
+        """
+        self.make_bare_repo_with_course('test.repo')
+        response = self.client.get('{}?action=push'.format(self.test_url))
+        self.assertIn('Export Succeeded', response.content)
+
+    def test_dirty_repo(self):
+        """
+        Add additional items not in the repo and make sure they aren't
+        there after the export. This allows old content to removed
+        in the repo.
+        """
+        repo_name = 'dirty_repo1'
+        self.make_bare_repo_with_course(repo_name)
+        git_export_utils.export_to_git(self.course.id,
+                                       self.course_module.giturl, self.user)
+
+        # Make arbitrary change to course to make diff
+        self.course_module.matlab_api_key = 'something'
+        modulestore().update_item(self.course_module, self.user.id)
+        # Touch a file in the directory, export again, and make sure
+        # the test file is gone
+        repo_dir = os.path.join(
+            os.path.abspath(git_export_utils.GIT_REPO_EXPORT_DIR),
+            repo_name
+        )
+        test_file = os.path.join(repo_dir, 'test.txt')
+        open(test_file, 'a').close()
+        self.assertTrue(os.path.isfile(test_file))
+        git_export_utils.export_to_git(self.course.id,
+                                       self.course_module.giturl, self.user)
+        self.assertFalse(os.path.isfile(test_file))

@@ -28,19 +28,22 @@ django-method-override==0.1.0
 djangorestframework==2.3.5
 django==1.4.5
 feedparser==5.1.3
-fs==0.4.0
+# Master pyfs has a bug working with VPC auth. This is a fix. We should switch
+# back to master when and if this fix is merged back.
+# fs==0.4.0
+git+https://github.com/pmitros/pyfs.git@96e1922348bfe6d99201b9512a9ed946c87b7e0b
 GitPython==0.3.2.RC1
 glob2==0.3
-lxml==3.0.1
+lxml==3.3.6
 mako==0.7.3
 Markdown==2.2.1
 mock==1.0.1
 networkx==1.7
 nltk==2.0.4
-oauthlib==0.5.1
+oauthlib==0.6.3
 paramiko==1.9.0
 path.py==3.0.1
-Pillow==1.7.8
+Pillow==2.6.1
 pip>=1.3
 polib==1.0.3
 pycrypto>=2.6
@@ -50,7 +53,7 @@ python-memcached==1.48
 python-openid==2.2.5
 pytz==2012h
 PyYAML==3.10
-requests==1.2.3
+requests==2.3.0
 Shapely==1.2.16
 sorl-thumbnail==11.12
 South==0.7.6

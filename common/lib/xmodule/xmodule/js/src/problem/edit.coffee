@@ -25,6 +25,7 @@ class @MarkdownEditingDescriptor extends XModule.Descriptor
       $(@element.find('.xml-box')).hide()
     else
       @createXMLEditor()
+      @xml_editor.display.wrapper.className += " CodeMirror-advanced";
 
   ###
   Creates the XML Editor and sets it as the current editor. If text is passed in,
@@ -48,10 +49,12 @@ class @MarkdownEditingDescriptor extends XModule.Descriptor
   ###
   onShowXMLButton: (e) =>
     e.preventDefault();
-    if @cheatsheet != undefined
-      @addRemoveCheatsheetCSS()
+    if @cheatsheet && @cheatsheet.hasClass('shown')
+      @cheatsheet.toggleClass('shown')
+      @toggleCheatsheetVisibility()
     if @confirmConversionToXml()
       @createXMLEditor(MarkdownEditingDescriptor.markdownToXml(@markdown_editor.getValue()))
+      @xml_editor.display.wrapper.className += " CodeMirror-advanced";
       # Need to refresh to get line numbers to display properly (and put cursor position to 0)
       @xml_editor.setCursor(0)
       @xml_editor.refresh()
@@ -96,21 +99,16 @@ class @MarkdownEditingDescriptor extends XModule.Descriptor
       @cheatsheet = $($('#simple-editor-cheatsheet').html())
       $(@markdown_editor.getWrapperElement()).append(@cheatsheet)
 
-    @addRemoveCheatsheetCSS()
+    @toggleCheatsheetVisibility()
 
     setTimeout (=> @cheatsheet.toggleClass('shown')), 10
 
 
   ###
-  Function to add/remove CSS for cheatsheet.
+  Function to toggle cheatsheet visibility.
   ###
-  addRemoveCheatsheetCSS: () =>
-    if !@cheatsheet.hasClass("shown")
-      $(".CodeMirror").css({"overflow": "visible"})
-      $(".modal-content").css({"overflow-y": "visible", "overflow-x": "visible"})
-    else
-      $(".CodeMirror").removeAttr("style")
-      $(".modal-content").removeAttr("style")
+  toggleCheatsheetVisibility: () =>
+    $('.modal-content').toggleClass('cheatsheet-is-shown')
 
   ###
   Stores the current editor and hides the one that is not displayed.

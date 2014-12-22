@@ -3,11 +3,12 @@ Asset compilation and collection.
 """
 from __future__ import print_function
 import argparse
-from paver.easy import sh, path, task, cmdopts, needs, consume_args, call_task
+from paver.easy import sh, path, task, cmdopts, needs, consume_args, call_task, no_help
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
 import glob
 import traceback
+import os
 from .utils.envs import Env
 from .utils.cmd import cmd, django_cmd
 
@@ -17,6 +18,7 @@ COFFEE_DIRS = ['lms', 'cms', 'common']
 SASS_LOAD_PATHS = ['./common/static/sass']
 SASS_UPDATE_DIRS = ['*/static']
 SASS_CACHE_PATH = '/tmp/sass-cache'
+
 
 THEME_COFFEE_PATHS = []
 THEME_SASS_PATHS = []
@@ -51,7 +53,7 @@ class CoffeeScriptWatcher(PatternMatchingEventHandler):
         print('\tCHANGED:', event.src_path)
         try:
             compile_coffeescript(event.src_path)
-        except Exception:  # pylint: disable=W0703
+        except Exception:  # pylint: disable=broad-except
             traceback.print_exc()
 
 
@@ -80,7 +82,7 @@ class SassWatcher(PatternMatchingEventHandler):
         print('\tCHANGED:', event.src_path)
         try:
             compile_sass()
-        except Exception:  # pylint: disable=W0703
+        except Exception:  # pylint: disable=broad-except
             traceback.print_exc()
 
 
@@ -101,7 +103,7 @@ class XModuleSassWatcher(SassWatcher):
         print('\tCHANGED:', event.src_path)
         try:
             process_xmodule_assets()
-        except Exception:  # pylint: disable=W0703
+        except Exception:  # pylint: disable=broad-except
             traceback.print_exc()
 
 
@@ -113,6 +115,8 @@ def coffeescript_files():
     return cmd('find', dirs, '-type f', '-name \"*.coffee\"')
 
 
+@task
+@no_help
 def compile_coffeescript(*files):
     """
     Compile CoffeeScript to JavaScript.
@@ -130,9 +134,10 @@ def compile_sass(debug=False):
     """
     sh(cmd(
         'sass', '' if debug else '--style compressed',
+        "--sourcemap" if debug else '',
         "--cache-location {cache}".format(cache=SASS_CACHE_PATH),
         "--load-path", " ".join(SASS_LOAD_PATHS + THEME_SASS_PATHS),
-        "--update", "-E", "utf-8", " ".join(SASS_UPDATE_DIRS + THEME_SASS_PATHS)
+        "--update", "-E", "utf-8", " ".join(SASS_UPDATE_DIRS + THEME_SASS_PATHS),
     ))
 
 
@@ -189,7 +194,10 @@ def watch_assets(options):
 
 
 @task
-@needs('pavelib.prereqs.install_prereqs')
+@needs(
+    'pavelib.prereqs.install_ruby_prereqs',
+    'pavelib.prereqs.install_node_prereqs',
+)
 @consume_args
 def update_assets(args):
     """
@@ -201,7 +209,7 @@ def update_assets(args):
         help="lms or studio",
     )
     parser.add_argument(
-        '--settings', type=str, default="dev",
+        '--settings', type=str, default="devstack",
         help="Django settings module",
     )
     parser.add_argument(

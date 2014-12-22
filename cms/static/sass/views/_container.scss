@@ -1,6 +1,6 @@
 // studio - views - container
 // ==========================
-// The container view renders xblocks three levels deep: Page Level, Nesting Level, and Element Level.
+// The container view renders xblocks at three levels: Page Level, Nesting Level, and Element Level.
 
 // For containers rendered at the element level, the container is rendered in a way that allows the user to navigate to a separate container page for that container making its children populate the nesting and element levels.
 
@@ -8,245 +8,305 @@
 
 // UI: container page view
 .view-container {
+  @extend %two-col-1;
 
-  .mast {
-    border-bottom: none;
-    padding-bottom: 0;
-  }
+  .wrapper-mast {
 
-  .wrapper-mast .mast.has-navigation .nav-actions {
-    bottom: -($baseline*.75);
+    .mast {
+      border-bottom: none;
+      padding-bottom: 0;
 
-    .nav-item .button {
+      .page-header {
 
-    }
-  }
+        .page-header-title {
+          @extend %t-title4;
+          @extend %t-strong;
+        }
 
-  .content-primary, .content-supplementary {
-    @include box-sizing(border-box);
-    float: left;
-  }
+        .is-editable {
 
-  .content-primary {
-    margin-right: flex-gutter();
-    width: flex-grid(9,12);
-    box-shadow: none;
-    border: 0;
+          // TOOD: abstract this out into a Sass placeholder
+          .incontext-editor-input {
+            @include transition(box-shadow $tmg-f1 ease-in-out 0, color $tmg-f1 ease-in-out 0);
+            @extend %t-title4;
+            @extend %t-strong;
+            width: 100%;
+            background: none repeat scroll 0 0 $white;
+            border: 0;
+            box-shadow: 0 0 2px 2px $shadow inset;
 
-    .no-container-content {
-      @extend %ui-well;
-      padding: ($baseline*2);
-      background-color: $gray-l4;
-      text-align: center;
-      color: $gray;
+            // STATE: focus
+            &:focus {
+              box-shadow: 0 0 2px 2px rgba($ui-action-primary-color-focus, 0.50) inset;
+              color: $ui-action-primary-color-focus;
+            }
+          }
+        }
+      }
 
-      .new-button {
-        @include font-size(14);
-        margin-left: $baseline;
+      &.has-actions {
 
-        [class^="icon-"] {
-          margin-right: ($baseline/2);
+        .nav-actions {
+
+          .button {
+            @extend %t-action3;
+            @extend %t-regular;
+            padding: ($baseline/4) ($baseline*.75);
+          }
         }
       }
     }
   }
 
+  .content-primary {
+
+    .no-container-content {
+      @extend %no-content;
+      padding: ($baseline*1.5) ($baseline*2);
+
+      // custom rules to reuse xblock validation styling in ui-well context
+      .icon-warning-sign {
+        display: none;
+      }
+    }
+
+    .container-message {
+
+      .message {
+        border-radius: 3px 3px 0 0;
+      }
+    }
+
+    // dragging bits
+    .ui-sortable-helper {
+
+      article {
+        display: none;
+      }
+    }
+
+    // drop target
+    .component-placeholder {
+      height: ($baseline*2.5);
+      opacity: .5;
+      margin: $baseline;
+      background-color: $gray-l5;
+      border-radius: ($baseline/2);
+      border: 2px dashed $gray-l2;
+    }
+  }
+
   .content-supplementary {
-    width: flex-grid(3,12);
 
     label {
       @extend %t-title8;
     }
 
     .bit-publishing {
-      margin-bottom: $baseline;
-      border-top: 5px solid $blue;
-      background-color: $white;
+      @extend %bar-module;
 
-      .pub-status {
-        @extend %t-title6;
-        display: block;
-        background-color: $blue-l2;
-        padding: ($baseline/2) ($baseline*.75);
-        font-weight: 600;
+      // CASE: content is ready to be made live
+      &.is-ready {
+        @extend %bar-module-green;
       }
 
-      &.published {
-        border-top: 5px solid $blue;
+      // CASE: content is live
+      &.is-live {
+        @extend %bar-module-blue;
+      }
 
-        .pub-status {
-          background-color: $blue-t0;
+      // CASE: content has warnings
+      &.has-warnings {
+        @extend %bar-module-yellow;
+      }
+
+      // CASE: content has erors
+      &.has-errors {
+        @extend %bar-module-red;
+      }
+
+      // CASE: content is staff only
+      &.staff-only,
+      &.is-staff-only {
+        @extend %bar-module-black;
+
+        &.is-scheduled .wrapper-release .copy {
+          text-decoration: line-through;
+        }
+      }
+
+      .bar-mod-content {
+        border: 0;
+        padding: ($baseline/2) ($baseline*.75) ($baseline/4) ($baseline*.75);
+
+        .title {
+          margin-bottom: ($baseline/10);
+        }
+      }
+
+      .wrapper-last-draft {
+
+        .date,
+        .user {
+          @extend %t-strong;
         }
 
-      }
-
-      &.draft {
-        border-top: 5px solid $gray-l1;
-
-        .pub-status {
-          background-color: $gray-l4;
+        .user {
+          @extend %cont-text-wrap;
         }
       }
 
-      .copy {
-        @extend %t-copy-sub1;
-        padding: ($baseline*.75) ($baseline*.75) ($baseline) ($baseline*.75);
+      .wrapper-release {
+
+        .release-date {
+          @extend %t-strong;
+        }
+
+        .release-with {
+          @extend %t-title8;
+          display: block;
+        }
+      }
+
+      .wrapper-visibility {
+
+        .copy {
+          @extend %t-strong;
+          margin-bottom: ($baseline/10);
+        }
+
+        [class^="icon-"] {
+          margin-left: ($baseline/4);
+          color: $gray-d1;
+        }
+
+        .inherited-from {
+          @extend %t-title8;
+          display: block;
+        }
+
+
+      }
+
+      .wrapper-pub-actions {
+        padding: ($baseline*.75);
+
+        .action-publish {
+          @extend %btn-primary-blue;
+          display: block;
+          padding: ($baseline/4) ($baseline/2) ($baseline/3) ($baseline/2);
+        }
+
+        .action-discard {
+          @extend %t-copy-sub1;
+          display: block;
+          margin-top: ($baseline/2);
+          text-align: right;
+
+          &.is-disabled {
+            pointer-events: none;
+            color: $gray-l1;
+          }
+        }
+      }
+
+    }
+
+    // versioning widget
+    .unit-publish-history {
+
+      .wrapper-last-publish {
+        margin-bottom: $baseline;
+        padding: ($baseline*.75);
+        background-color: $white;
+
+        .copy {
+          @extend %t-copy-sub2;
+          color: $gray;
+        }
+
+        .date,
+        .user {
+          @extend %t-strong;
+        }
+
+        .user {
+          @extend %cont-text-wrap;
+        }
+      }
+    }
+
+    // location widget
+    .unit-location {
+      @extend %bar-module;
+      border-top: none;
+
+      .wrapper-unit-id {
+
+        .unit-id-value {
+          @extend %cont-text-wrap;
+          @extend %t-copy-sub1;
+          display: inline-block;
+          width: 100%;
+        }
+
+        .tip {
+          @extend %t-copy-sub2;
+          display: inline-block;
+          margin: ($baseline/4) 0;
+          color: $gray-l2;
+        }
+      }
+
+      .wrapper-unit-tree-location {
+
+        .item-title {
+          @extend %cont-text-wrap;
+
+          a {
+            color: $blue;
+
+            &:hover {
+              color: $orange-d1;
+            }
+          }
+        }
+
+        // CASE: is current item being edited/viewed
+        .is-current {
+          background: $gray-l4;
+
+          .unit-title a {
+            @extend %ui-disabled;
+            @extend %t-strong;
+            color: $color-heading-base;
+          }
+        }
+
+        // typographical overrides (based off of outline-simple)
+        .section-header, .subsection-header {
+          line-height: 0;
+          margin-bottom: ($baseline/2);
+        }
+
+        .section-header {
+          border-bottom: 1px solid $gray-l4;
+          padding-bottom: ($baseline/2);
+        }
+
+        // subsections overrides (based off of outline-simple)
+        .outline-subsection {
+          border: none;
+          padding: 0;
+        }
+
+        // units overrides (based off of outline-simple)
+        .outline-unit {
+          padding: 3px 6px;
+        }
       }
     }
   }
 }
 
-// UI: xblock rendering
-body.view-container .content-primary {
-
-  // dragging bits
-  .ui-sortable-helper {
-
-    article {
-      display: none;
-    }
-  }
-
-  .component-placeholder {
-    height: ($baseline*2.5);
-    opacity: .5;
-    margin: $baseline;
-    background-color: $gray-l5;
-    border-radius: ($baseline/2);
-    border: 2px dashed $gray-l2;
-  }
-
-  .vert-mod {
-
-    // min-height to allow drop when empty
-    .vertical-container {
-      min-height: ($baseline*2.5);
-    }
-
-    .vert {
-      position: relative;
-
-      .drag-handle {
-        display: none; // only show when vert is draggable
-        position: absolute;
-        top: 0;
-        right: ($baseline/2); // equal to margin on component
-        width: ($baseline*1.5);
-        height: ($baseline*2.5);
-        margin: 0;
-        background: transparent url("../img/drag-handles.png") no-repeat scroll center center;
-      }
-    }
-
-    .is-draggable {
-
-      .xblock-header {
-        padding-right: ($baseline*1.5); // make room for drag handle
-      }
-
-      .drag-handle {
-        display: block;
-      }
-    }
-  }
-
-  .wrapper-xblock {
-    @extend %wrap-xblock;
-
-    // CASE: page level xblock rendering
-    &.level-page {
-      margin: 0;
-
-      .xblock-header {
-        display: none;
-      }
-    }
-
-    // CASE: nesting level xblock rendering
-    &.level-nesting {
-      @include transition(all $tmg-f2 linear 0s);
-      border: none;
-      padding-bottom: $baseline;
-      box-shadow: none;
-
-      &:hover {
-        background-color: $gray-l6;
-        box-shadow: 0 0 1px $shadow-d2 inset;
-      }
-
-      .xblock-header {
-        @include ui-flexbox();
-        margin-bottom: ($baseline/2);
-        border-bottom: none;
-        background: none;
-      }
-
-      .xblock-render {
-        margin: ($baseline/2);
-      }
-
-      // STATE: nesting level xblock is collapsed
-      &.collapsed {
-        padding-bottom: 0;
-        background-color: $gray-l7;
-        box-shadow: 0 0 1px $shadow-d2 inset;
-      }
-    }
-
-    // CASE: element level xblock rendering
-    &.level-element {
-      @include transition(all $tmg-f2 linear 0s);
-      box-shadow: none;
-
-      &:hover {
-        border-color: $blue;
-      }
-
-      .xblock-header {
-        display: flex;
-        margin-bottom: 0;
-        border-bottom: 1px solid $gray-l4;
-        background-color: $gray-l6;
-        font-weight: 300;
-      }
-
-      .xblock-render {
-        margin: ($baseline/2);
-        padding: ($baseline/2);
-      }
-
-      // STATE: xBlock containers styled as rows.
-      &.xblock-type-container {
-
-        .xblock-header {
-          margin-bottom: 0;
-          border-bottom: 0;
-          border-radius: ($baseline/5);
-        }
-
-        .xblock-render {
-          display: none;
-        }
-      }
-    }
-  }
-}
-
-// ====================
-
-// UI: xblocks - internal styling
-
-// In order to ensure visual consistency across the unit and container pages, certain styles need to be applied to render on the container page until they are also cleaned up and applied differently on the unit page.
-.wrapper-xblock {
-
-    // UI: xblocks - internal headings for problems and video components
-    h2 {
-    margin: 30px 40px 30px 0;
-    color: #646464;
-    font-size: 19px;
-    font-weight: 300;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-  }
-}
 

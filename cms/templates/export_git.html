@@ -38,7 +38,7 @@
         % else:
         <ul class="list-actions">
           <li class="item-action">
-            <a class="action action-export-git"" action-primary" href="${reverse('export_git', kwargs=dict(org=context_course.location.org, course=context_course.location.course, name=context_course.location.name))}?action=push">
+            <a class="action action-export-git"" action-primary" href="${reverse('export_git', kwargs=dict(course_key_string=unicode(context_course.id)))}?action=push">
               <i class="icon-download"></i>
               <span class="copy">${_("Export to Git")}</span>
             </a>
@@ -57,10 +57,10 @@
         % endif
       </div>
     </article>
-    <aside class="content-supplementary" role="complimentary">
+    <aside class="content-supplementary" role="complementary">
       <dl class="export-git-info-block">
         <dt>${_("Your course:")}</dt>
-        <dd class="course_text">${context_course.id}</dd>
+        <dd class="course_text">${context_course.id | h}</dd>
         <dt>${_("Course git url:")}</dt>
         <dd class="giturl_text">${context_course.giturl}</dd>
       </dl>

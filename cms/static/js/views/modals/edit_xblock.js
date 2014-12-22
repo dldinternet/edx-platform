@@ -3,9 +3,9 @@
  * It is invoked using the edit method which is passed an existing rendered xblock,
  * and upon save an optional refresh function can be invoked to update the display.
  */
-define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
+define(["jquery", "underscore", "gettext", "js/views/modals/base_modal", "js/views/utils/view_utils",
     "js/models/xblock_info", "js/views/xblock_editor"],
-    function($, _, gettext, BaseModal, XBlockInfo, XBlockEditorView) {
+    function($, _, gettext, BaseModal, ViewUtils, XBlockInfo, XBlockEditorView) {
         var EditXBlockModal = BaseModal.extend({
             events : {
                 "click .action-save": "save",
@@ -14,7 +14,8 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
 
             options: $.extend({}, BaseModal.prototype.options, {
                 modalName: 'edit-xblock',
-                addSaveButton: true
+                addSaveButton: true,
+                viewSpecificClasses: 'modal-editor confirm'
             }),
 
             initialize: function() {
@@ -64,15 +65,10 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
 
             onDisplayXBlock: function() {
                 var editorView = this.editorView,
-                    title = this.getTitle(),
-                    xblock = editorView.xblock,
-                    runtime = xblock.runtime;
+                    title = this.getTitle();
 
                 // Notify the runtime that the modal has been shown
-                if (runtime) {
-                    this.runtime = runtime;
-                    runtime.notify("edit-modal-shown", this);
-                }
+                editorView.notifyRuntime('modal-shown', this);
 
                 // Update the modal's header
                 if (editorView.hasCustomTabs()) {
@@ -92,7 +88,7 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
                 // If the xblock is not using custom buttons then choose which buttons to show
                 if (!editorView.hasCustomButtons()) {
                     // If the xblock does not support save then disable the save button
-                    if (!xblock.save) {
+                    if (!editorView.xblock.save) {
                         this.disableSave();
                     }
                     this.getActionBar().show();
@@ -111,13 +107,9 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
             },
 
             getTitle: function() {
-                var displayName = this.xblockElement.find('.xblock-header .header-details').text().trim();
-                // If not found, try the old unit page style rendering
+                var displayName = this.xblockInfo.get('display_name');
                 if (!displayName) {
-                    displayName = this.xblockElement.find('.component-header').text().trim();
-                    if (!displayName) {
-                        displayName = gettext('Component');
-                    }
+                    displayName = gettext('Component');
                 }
                 return interpolate(gettext("Editing: %(title)s"), { title: displayName }, true);
             },
@@ -132,15 +124,10 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
             },
 
             changeMode: function(event) {
+                this.removeCheatsheetVisibility();
                 var parent = $(event.target.parentElement),
                     mode = parent.data('mode');
                 event.preventDefault();
-                var $cheatsheet = $('.simple-editor-cheatsheet');
-                if ($cheatsheet.hasClass("shown")) {
-                    $(".CodeMirror").removeAttr("style");
-                    $(".modal-content").removeAttr("style");
-                    $cheatsheet.removeClass('shown');
-                }
                 this.selectMode(mode);
             },
 
@@ -156,10 +143,19 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
             },
 
             save: function(event) {
+                var self = this,
+                    editorView = this.editorView,
+                    xblockInfo = this.xblockInfo,
+                    data = editorView.getXModuleData();
                 event.preventDefault();
-                this.editorView.save({
-                    success: _.bind(this.onSave, this)
-                });
+                if (data) {
+                    ViewUtils.runOperationShowingMessage(gettext('Saving&hellip;'),
+                        function() {
+                            return xblockInfo.save(data);
+                        }).done(function() {
+                            self.onSave();
+                        });
+                }
             },
 
             onSave: function() {
@@ -174,23 +170,26 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
                 BaseModal.prototype.hide.call(this);
 
                 // Notify the runtime that the modal has been hidden
-                if (this.runtime) {
-                    this.runtime.notify('edit-modal-hidden');
-                }
-
-                // Completely clear the contents of the modal
-                this.undelegateEvents();
-                this.$el.html("");
+                this.editorView.notifyRuntime('modal-hidden');
             },
 
             findXBlockInfo: function(xblockWrapperElement, defaultXBlockInfo) {
                 var xblockInfo = defaultXBlockInfo,
-                    xblockElement;
+                    xblockElement,
+                    displayName;
                 if (xblockWrapperElement.length > 0) {
                     xblockElement = xblockWrapperElement.find('.xblock');
+                    displayName = xblockWrapperElement.find('.xblock-header .header-details .xblock-display-name').text().trim();
+                    // If not found, try looking for the old unit page style rendering.
+                    // Only used now by static pages.
+                    if (!displayName) {
+                        displayName = this.xblockElement.find('.component-header').text().trim();
+                    }
                     xblockInfo = new XBlockInfo({
                         id: xblockWrapperElement.data('locator'),
-                        category: xblockElement.data('block-type')
+                        courseKey: xblockWrapperElement.data('course-key'),
+                        category: xblockElement.data('block-type'),
+                        display_name: displayName
                     });
                 }
                 return xblockInfo;
@@ -202,6 +201,17 @@ define(["jquery", "underscore", "gettext", "js/views/modals/base_modal",
                     mode: mode,
                     displayName: displayName
                 }));
+            },
+
+            removeCheatsheetVisibility: function() {
+                var cheatsheet = $('article.simple-editor-open-ended-cheatsheet');
+                if (cheatsheet.length === 0) {
+                    cheatsheet = $('article.simple-editor-cheatsheet');
+                }
+                if (cheatsheet.hasClass('shown')) {
+                    cheatsheet.removeClass('shown');
+                    $('.modal-content').removeClass('cheatsheet-is-shown');
+                }
             }
         });
 

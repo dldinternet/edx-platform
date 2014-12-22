@@ -1,4 +1,4 @@
-define ["js/models/uploads", "js/views/uploads", "js/models/chapter", "js/spec_helpers/create_sinon", "js/spec_helpers/modal_helpers"], (FileUpload, UploadDialog, Chapter, create_sinon, modal_helpers) ->
+define ["js/models/uploads", "js/views/uploads", "js/models/chapter", "js/common_helpers/ajax_helpers", "js/spec_helpers/modal_helpers"], (FileUpload, UploadDialog, Chapter, AjaxHelpers, modal_helpers) ->
 
     feedbackTpl = readFixtures('system-feedback.underscore')
 
@@ -64,6 +64,32 @@ define ["js/models/uploads", "js/views/uploads", "js/models/chapter", "js/spec_h
                 expect(@view.$el).toContain("#upload_error")
                 expect(@view.$(".action-upload")).toHaveClass("disabled")
 
+            it "should render an error with an invalid file type after a correct file type selected", ->
+                correctFile = {name: "fake.pdf", "type": "application/pdf"}
+                inCorrectFile = {name: "fake.png", "type": "image/png"}
+                event = {}
+                @view.render()
+
+                event.target = {"files": [correctFile]}
+                @view.selectFile(event)
+                expect(@view.$el).toContain("input[type=file]")
+                expect(@view.$el).not.toContain("#upload_error")
+                expect(@view.$(".action-upload")).not.toHaveClass("disabled")
+
+                realMethod = @model.set
+                spyOn(@model, "set").andCallFake (data) ->
+                  if data.selectedFile != undefined
+                    this.attributes.selectedFile = data.selectedFile
+                    this.changed = {}
+                  else
+                    realMethod.apply(this, arguments)
+
+                event.target = {"files": [inCorrectFile]}
+                @view.selectFile(event)
+                expect(@view.$el).toContain("input[type=file]")
+                expect(@view.$el).toContain("#upload_error")
+                expect(@view.$(".action-upload")).toHaveClass("disabled")
+
         describe "Uploads", ->
             beforeEach ->
                 @clock = sinon.useFakeTimers()
@@ -72,7 +98,7 @@ define ["js/models/uploads", "js/views/uploads", "js/models/chapter", "js/spec_h
                 @clock.restore()
 
             it "can upload correctly", ->
-                requests = create_sinon["requests"](this)
+                requests = AjaxHelpers["requests"](this)
 
                 @view.render()
                 @view.upload()
@@ -89,7 +115,7 @@ define ["js/models/uploads", "js/views/uploads", "js/models/chapter", "js/spec_h
                 expect(@dialogResponse.pop()).toEqual("dummy_response")
 
             it "can handle upload errors", ->
-                requests = create_sinon["requests"](this)
+                requests = AjaxHelpers["requests"](this)
 
                 @view.render()
                 @view.upload()
@@ -98,7 +124,7 @@ define ["js/models/uploads", "js/views/uploads", "js/models/chapter", "js/spec_h
                 expect(@view.remove).not.toHaveBeenCalled()
 
             it "removes itself after two seconds on successful upload", ->
-                requests = create_sinon["requests"](this)
+                requests = AjaxHelpers["requests"](this)
 
                 @view.render()
                 @view.upload()

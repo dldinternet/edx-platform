@@ -2,6 +2,9 @@
 Unit tests for the notes app.
 """
 
+from mock import patch, Mock
+
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 from django.test import TestCase
 from django.test.client import Client
 from django.core.urlresolvers import reverse
@@ -11,7 +14,7 @@ from django.core.exceptions import ValidationError
 import collections
 import json
 
-from . import utils, api, models
+from notes import utils, api, models
 
 
 class UtilsTest(TestCase):
@@ -48,17 +51,19 @@ class ApiTest(TestCase):
         self.client = Client()
 
         # Mocks
-        api.api_enabled = self.mock_api_enabled(True)
+        patcher = patch.object(api, 'api_enabled', Mock(return_value=True))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         # Create two accounts
         self.password = 'abc'
         self.student = User.objects.create_user('student', 'student@test.com', self.password)
         self.student2 = User.objects.create_user('student2', 'student2@test.com', self.password)
         self.instructor = User.objects.create_user('instructor', 'instructor@test.com', self.password)
-        self.course_id = 'HarvardX/CB22x/The_Ancient_Greek_Hero'
+        self.course_key = SlashSeparatedCourseKey('HarvardX', 'CB22x', 'The_Ancient_Greek_Hero')
         self.note = {
             'user': self.student,
-            'course_id': self.course_id,
+            'course_id': self.course_key,
             'uri': '/',
             'text': 'foo',
             'quote': 'bar',
@@ -72,9 +77,6 @@ class ApiTest(TestCase):
         # Make sure no note with this ID ever exists for testing purposes
         self.NOTE_ID_DOES_NOT_EXIST = 99999
 
-    def mock_api_enabled(self, is_enabled):
-        return (lambda request, course_id: is_enabled)
-
     def login(self, as_student=None):
         username = None
         password = self.password
@@ -87,7 +89,7 @@ class ApiTest(TestCase):
         self.client.login(username=username, password=password)
 
     def url(self, name, args={}):
-        args.update({'course_id': self.course_id})
+        args.update({'course_id': self.course_key.to_deprecated_string()})
         return reverse(name, kwargs=args)
 
     def create_notes(self, num_notes, create=True):
@@ -343,10 +345,10 @@ class NoteTest(TestCase):
     def setUp(self):
         self.password = 'abc'
         self.student = User.objects.create_user('student', 'student@test.com', self.password)
-        self.course_id = 'HarvardX/CB22x/The_Ancient_Greek_Hero'
+        self.course_key = SlashSeparatedCourseKey('HarvardX', 'CB22x', 'The_Ancient_Greek_Hero')
         self.note = {
             'user': self.student,
-            'course_id': self.course_id,
+            'course_id': self.course_key,
             'uri': '/',
             'text': 'foo',
             'quote': 'bar',
@@ -361,7 +363,7 @@ class NoteTest(TestCase):
         reference_note = models.Note(**self.note)
         body = reference_note.as_dict()
 
-        note = models.Note(course_id=self.course_id, user=self.student)
+        note = models.Note(course_id=self.course_key, user=self.student)
         try:
             note.clean(json.dumps(body))
             self.assertEqual(note.uri, body['uri'])
@@ -376,7 +378,7 @@ class NoteTest(TestCase):
             self.fail('a valid note should not raise an exception')
 
     def test_clean_invalid_note(self):
-        note = models.Note(course_id=self.course_id, user=self.student)
+        note = models.Note(course_id=self.course_key, user=self.student)
         for empty_type in (None, '', 0, []):
             with self.assertRaises(ValidationError):
                 note.clean(None)
@@ -389,7 +391,7 @@ class NoteTest(TestCase):
             }))
 
     def test_as_dict(self):
-        note = models.Note(course_id=self.course_id, user=self.student)
+        note = models.Note(course_id=self.course_key, user=self.student)
         d = note.as_dict()
         self.assertNotIsInstance(d, basestring)
         self.assertEqual(d['user_id'], self.student.id)

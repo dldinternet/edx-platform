@@ -2,6 +2,7 @@
 from mock import MagicMock
 import xmodule.tabs as tabs
 import unittest
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
 
 class TabTestCase(unittest.TestCase):
@@ -9,7 +10,7 @@ class TabTestCase(unittest.TestCase):
     def setUp(self):
 
         self.course = MagicMock()
-        self.course.id = 'edX/toy/2012_Fall'
+        self.course.id = SlashSeparatedCourseKey('edX', 'toy', '2012_Fall')
         self.fake_dict_tab = {'fake_key': 'fake_value'}
         self.settings = MagicMock()
         self.settings.FEATURES = {}
@@ -89,22 +90,42 @@ class TabTestCase(unittest.TestCase):
         deserialized_tab = tab.from_json(serialized_tab)
         self.assertEquals(serialized_tab, deserialized_tab)
 
-    def check_can_display_results(self, tab, expected_value=True, for_authenticated_users_only=False, for_staff_only=False):
+    def check_can_display_results(
+        self,
+        tab,
+        expected_value=True,
+        for_authenticated_users_only=False,
+        for_staff_only=False,
+        for_enrolled_users_only=False
+    ):
         """Checks can display results for various users"""
         if for_staff_only:
             self.assertEquals(
                 expected_value,
-                tab.can_display(self.course, self.settings, is_user_authenticated=False, is_user_staff=True)
+                tab.can_display(
+                    self.course, self.settings, is_user_authenticated=True, is_user_staff=True, is_user_enrolled=True
+                )
             )
         if for_authenticated_users_only:
             self.assertEquals(
                 expected_value,
-                tab.can_display(self.course, self.settings, is_user_authenticated=True, is_user_staff=False)
+                tab.can_display(
+                    self.course, self.settings, is_user_authenticated=True, is_user_staff=False, is_user_enrolled=False
+                )
             )
-        if not for_staff_only and not for_authenticated_users_only:
+        if not for_staff_only and not for_authenticated_users_only and not for_enrolled_users_only:
             self.assertEquals(
                 expected_value,
-                tab.can_display(self.course, self.settings, is_user_authenticated=False, is_user_staff=False)
+                tab.can_display(
+                    self.course, self.settings, is_user_authenticated=False, is_user_staff=False, is_user_enrolled=False
+                )
+            )
+        if for_enrolled_users_only:
+            self.assertEquals(
+                expected_value,
+                tab.can_display(
+                    self.course, self.settings, is_user_authenticated=True, is_user_staff=False, is_user_enrolled=True
+                )
             )
 
     def check_get_and_set_methods(self, tab):
@@ -137,7 +158,7 @@ class ProgressTestCase(TabTestCase):
         return self.check_tab(
             tab_class=tabs.ProgressTab,
             dict_tab={'type': tabs.ProgressTab.type, 'name': 'same'},
-            expected_link=self.reverse('progress', args=[self.course.id]),
+            expected_link=self.reverse('progress', args=[self.course.id.to_deprecated_string()]),
             expected_tab_id=tabs.ProgressTab.type,
             invalid_dict_tab=None,
         )
@@ -146,11 +167,15 @@ class ProgressTestCase(TabTestCase):
 
         self.course.hide_progress_tab = False
         tab = self.check_progress_tab()
-        self.check_can_display_results(tab, for_authenticated_users_only=True)
+        self.check_can_display_results(
+            tab, for_staff_only=True, for_enrolled_users_only=True
+        )
 
         self.course.hide_progress_tab = True
         self.check_progress_tab()
-        self.check_can_display_results(tab, for_authenticated_users_only=True, expected_value=False)
+        self.check_can_display_results(
+            tab, for_staff_only=True, for_enrolled_users_only=True, expected_value=False
+        )
 
 
 class WikiTestCase(TabTestCase):
@@ -161,17 +186,29 @@ class WikiTestCase(TabTestCase):
         return self.check_tab(
             tab_class=tabs.WikiTab,
             dict_tab={'type': tabs.WikiTab.type, 'name': 'same'},
-            expected_link=self.reverse('course_wiki', args=[self.course.id]),
+            expected_link=self.reverse('course_wiki', args=[self.course.id.to_deprecated_string()]),
             expected_tab_id=tabs.WikiTab.type,
             invalid_dict_tab=self.fake_dict_tab,
         )
 
-    def test_wiki_enabled(self):
-        """Test wiki tab when Enabled setting is True"""
-
+    def test_wiki_enabled_and_public(self):
+        """
+        Test wiki tab when Enabled setting is True and the wiki is open to
+        the public.
+        """
         self.settings.WIKI_ENABLED = True
+        self.course.allow_public_wiki_access = True
         tab = self.check_wiki_tab()
         self.check_can_display_results(tab)
+
+    def test_wiki_enabled_and_not_public(self):
+        """
+        Test wiki when it is enabled but not open to the public
+        """
+        self.settings.WIKI_ENABLED = True
+        self.course.allow_public_wiki_access = False
+        tab = self.check_wiki_tab()
+        self.check_can_display_results(tab, for_enrolled_users_only=True, for_staff_only=True)
 
     def test_wiki_enabled_false(self):
         """Test wiki tab when Enabled setting is False"""
@@ -220,7 +257,7 @@ class StaticTabTestCase(TabTestCase):
         tab = self.check_tab(
             tab_class=tabs.StaticTab,
             dict_tab={'type': tabs.StaticTab.type, 'name': 'same', 'url_slug': url_slug},
-            expected_link=self.reverse('static_tab', args=[self.course.id, url_slug]),
+            expected_link=self.reverse('static_tab', args=[self.course.id.to_deprecated_string(), url_slug]),
             expected_tab_id='static_tab_schmug',
             invalid_dict_tab=self.fake_dict_tab,
         )
@@ -257,7 +294,10 @@ class TextbooksTestCase(TabTestCase):
             # verify all textbook type tabs
             if isinstance(tab, tabs.SingleTextbookTab):
                 book_type, book_index = tab.tab_id.split("/", 1)
-                expected_link = self.reverse(type_to_reverse_name[book_type], args=[self.course.id, book_index])
+                expected_link = self.reverse(
+                    type_to_reverse_name[book_type],
+                    args=[self.course.id.to_deprecated_string(), book_index]
+                )
                 self.assertEqual(tab.link_func(self.course, self.reverse), expected_link)
                 self.assertTrue(tab.name.startswith('Book{0}'.format(book_index)))
                 num_textbooks_found = num_textbooks_found + 1
@@ -279,7 +319,7 @@ class GradingTestCase(TabTestCase):
             tab_class=tab_class,
             dict_tab={'type': tab_class.type, 'name': name},
             expected_name=name,
-            expected_link=self.reverse(link_value, args=[self.course.id]),
+            expected_link=self.reverse(link_value, args=[self.course.id.to_deprecated_string()]),
             expected_tab_id=tab_class.type,
             invalid_dict_tab=None,
         )
@@ -314,7 +354,7 @@ class NotesTestCase(TabTestCase):
         return self.check_tab(
             tab_class=tabs.NotesTab,
             dict_tab={'type': tabs.NotesTab.type, 'name': 'same'},
-            expected_link=self.reverse('notes', args=[self.course.id]),
+            expected_link=self.reverse('notes', args=[self.course.id.to_deprecated_string()]),
             expected_tab_id=tabs.NotesTab.type,
             invalid_dict_tab=self.fake_dict_tab,
         )
@@ -341,7 +381,7 @@ class SyllabusTestCase(TabTestCase):
             tab_class=tabs.SyllabusTab,
             dict_tab={'type': tabs.SyllabusTab.type, 'name': name},
             expected_name=name,
-            expected_link=self.reverse('syllabus', args=[self.course.id]),
+            expected_link=self.reverse('syllabus', args=[self.course.id.to_deprecated_string()]),
             expected_tab_id=tabs.SyllabusTab.type,
             invalid_dict_tab=None,
         )
@@ -365,7 +405,7 @@ class InstructorTestCase(TabTestCase):
             tab_class=tabs.InstructorTab,
             dict_tab={'type': tabs.InstructorTab.type, 'name': name},
             expected_name=name,
-            expected_link=self.reverse('instructor_dashboard', args=[self.course.id]),
+            expected_link=self.reverse('instructor_dashboard', args=[self.course.id.to_deprecated_string()]),
             expected_tab_id=tabs.InstructorTab.type,
             invalid_dict_tab=None,
         )
@@ -540,7 +580,7 @@ class CourseTabListTestCase(TabListTestCase):
         )):
             self.assertEquals(tab.type, self.course.tabs[i].type)
 
-       # enumerate the tabs and verify textbooks and the instructor tab
+        # enumerate the tabs and verify textbooks and the instructor tab
         for i, tab in enumerate(tabs.CourseTabList.iterate_displayable(
             self.course,
             self.settings,
@@ -603,11 +643,18 @@ class DiscussionLinkTestCase(TabTestCase):
         """Custom reverse function"""
         def reverse_discussion_link(viewname, args):
             """reverse lookup for discussion link"""
-            if viewname == "django_comment_client.forum.views.forum_form_discussion" and args == [course.id]:
+            if viewname == "django_comment_client.forum.views.forum_form_discussion" and args == [course.id.to_deprecated_string()]:
                 return "default_discussion_link"
         return reverse_discussion_link
 
-    def check_discussion(self, tab_list, expected_discussion_link, expected_can_display_value, discussion_link_in_course=""):
+    def check_discussion(
+        self, tab_list,
+        expected_discussion_link,
+        expected_can_display_value,
+        discussion_link_in_course="",
+        is_staff=True,
+        is_enrolled=True,
+    ):
         """Helper function to verify whether the discussion tab exists and can be displayed"""
         self.course.tabs = tab_list
         self.course.discussion_link = discussion_link_in_course
@@ -615,7 +662,7 @@ class DiscussionLinkTestCase(TabTestCase):
         self.assertEquals(
             (
                 discussion is not None and
-                discussion.can_display(self.course, self.settings, True, True) and
+                discussion.can_display(self.course, self.settings, True, is_staff, is_enrolled) and
                 (discussion.link_func(self.course, self._reverse(self.course)) == expected_discussion_link)
             ),
             expected_can_display_value
@@ -657,4 +704,26 @@ class DiscussionLinkTestCase(TabTestCase):
             tab_list=self.tabs_without_discussion,
             expected_discussion_link=not None,
             expected_can_display_value=False,
+        )
+
+    def test_tabs_enrolled_or_staff(self):
+        self.settings.FEATURES['ENABLE_DISCUSSION_SERVICE'] = True
+        for is_enrolled, is_staff in [(True, False), (False, True)]:
+            self.check_discussion(
+                tab_list=self.tabs_with_discussion,
+                expected_discussion_link="default_discussion_link",
+                expected_can_display_value=True,
+                is_enrolled=is_enrolled,
+                is_staff=is_staff
+            )
+
+    def test_tabs_not_enrolled_or_staff(self):
+        self.settings.FEATURES['ENABLE_DISCUSSION_SERVICE'] = True
+        is_enrolled = is_staff = False
+        self.check_discussion(
+            tab_list=self.tabs_with_discussion,
+            expected_discussion_link="default_discussion_link",
+            expected_can_display_value=False,
+            is_enrolled=is_enrolled,
+            is_staff=is_staff
         )

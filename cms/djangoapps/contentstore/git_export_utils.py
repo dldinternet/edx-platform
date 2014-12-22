@@ -14,7 +14,6 @@ from django.utils import timezone
 from django.utils.translation import ugettext_lazy as _
 
 from xmodule.contentstore.django import contentstore
-from xmodule.course_module import CourseDescriptor
 from xmodule.modulestore.django import modulestore
 from xmodule.modulestore.xml_exporter import export_to_xml
 
@@ -58,18 +57,15 @@ def cmd_log(cmd, cwd):
     command doesn't return 0, and returns the command's output.
     """
     output = subprocess.check_output(cmd, cwd=cwd, stderr=subprocess.STDOUT)
-    log.debug(_('Command was: {0!r}. '
-                'Working directory was: {1!r}'.format(' '.join(cmd), cwd)))
-    log.debug(_('Command output was: {0!r}'.format(output)))
+    log.debug('Command was: {0!r}. '
+              'Working directory was: {1!r}'.format(' '.join(cmd), cwd))
+    log.debug('Command output was: {0!r}'.format(output))
     return output
 
 
-def export_to_git(course_loc, repo, user='', rdir=None):
+def export_to_git(course_id, repo, user='', rdir=None):
     """Export a course to git."""
-    # pylint: disable=R0915
-
-    if course_loc.startswith('i4x://'):
-        course_loc = course_loc[6:]
+    # pylint: disable=too-many-statements
 
     if not GIT_REPO_EXPORT_DIR:
         raise GitExportError(GitExportError.NO_EXPORT_DIR)
@@ -99,8 +95,8 @@ def export_to_git(course_loc, repo, user='', rdir=None):
     rdirp = '{0}/{1}'.format(GIT_REPO_EXPORT_DIR, rdir)
     branch = None
     if os.path.exists(rdirp):
-        log.info(_('Directory already exists, doing a git reset and pull '
-                   'instead of git clone.'))
+        log.info('Directory already exists, doing a git reset and pull '
+                 'instead of git clone.')
         cwd = rdirp
         # Get current branch
         cmd = ['git', 'symbolic-ref', '--short', 'HEAD']
@@ -115,6 +111,7 @@ def export_to_git(course_loc, repo, user='', rdir=None):
             ['git', 'fetch', 'origin'],
             ['git', 'reset', '--hard', 'origin/{0}'.format(branch)],
             ['git', 'pull'],
+            ['git', 'clean', '-d', '-f'],
         ]
     else:
         cmds = [['git', 'clone', repo]]
@@ -129,16 +126,11 @@ def export_to_git(course_loc, repo, user='', rdir=None):
             raise GitExportError(GitExportError.CANNOT_PULL)
 
     # export course as xml before commiting and pushing
-    try:
-        location = CourseDescriptor.id_to_location(course_loc)
-    except ValueError:
-        raise GitExportError(GitExportError.BAD_COURSE)
-
     root_dir = os.path.dirname(rdirp)
-    course_dir = os.path.splitext(os.path.basename(rdirp))[0]
+    course_dir = os.path.basename(rdirp).rsplit('.git', 1)[0]
     try:
-        export_to_xml(modulestore('direct'), contentstore(), location,
-                      root_dir, course_dir, modulestore())
+        export_to_xml(modulestore(), contentstore(), course_id,
+                      root_dir, course_dir)
     except (EnvironmentError, AttributeError):
         log.exception('Failed export to xml')
         raise GitExportError(GitExportError.XML_EXPORT_FAIL)

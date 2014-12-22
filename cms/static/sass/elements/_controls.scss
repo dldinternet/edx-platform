@@ -1,8 +1,6 @@
 // studio - elements - UI controls
 // ====================
 
-// ====================
-
 // general actions
 %action {
   @extend %ui-fake-link;
@@ -12,6 +10,14 @@
     -webkit-filter: grayscale(65%);
     opacity: 0.65;
   }
+}
+
+// ====================
+
+// general type and size
+%sizing {
+  @extend %t-action4;
+  padding: ($baseline/4) ($baseline/2) ($baseline/3) ($baseline/2);
 }
 
 // ====================
@@ -46,8 +52,8 @@
   color: $white;
 
   &:hover, &:active {
-    background: $blue-s2;
-    border-color: $blue-s2;
+    background: $blue-l1;
+    border-color: $blue-l1;
   }
 
   &.current, &.active {
@@ -123,6 +129,27 @@
 
     &:hover, &:active {
 
+    }
+  }
+}
+
+// white secondary button
+%btn-secondary-white {
+  @extend %ui-btn-secondary;
+  border-color: $white-t2;
+  color: $white-t3;
+
+  &:hover, &:active {
+    border-color: $white;
+    color: $white;
+  }
+
+  &.current, &.active {
+    background: $gray-d2;
+    color: $gray-l5;
+
+    &:hover, &:active {
+      background: $gray-d2;
     }
   }
 }
@@ -207,32 +234,23 @@
 
 // ====================
 
-// calls-to-action
-
-// ====================
-
-// specific buttons - view live
-%view-live-button {
-  @extend %t-action4;
-}
-
-// ====================
-
 // UI: element actions list
-%actions-header {
-  .actions-list {
-    display: inline-block;
-    margin-bottom: 0;
-  }
+
+%actions-list {
+  display: inline-block;
+  margin-bottom: 0;
 
   .action-item {
+    position: relative;
     display: inline-block;
     vertical-align: middle;
+    margin: ($baseline/10) 0 ($baseline/10) ($baseline/10);
 
     .action-button {
+      @include transition(all $tmg-f3 linear 0s);
       display: block;
       border-radius: 3px;
-      padding: ($baseline/4) ($baseline/2);
+      padding: 3px ($baseline/2);
       color: $gray-l1;
 
       &:hover {
@@ -248,6 +266,10 @@
       &.delete-button:hover {
         background-color: $gray-l1;
       }
+
+      [class^="icon-"] {
+        font-style: normal;
+      }
     }
 
     .drag-handle {
@@ -256,12 +278,25 @@
       height: ($baseline*1.2);
       width: ($baseline);
       margin: 0;
-      background: transparent url("../img/drag-handles.png") no-repeat right center;
+
+      // CASE: right to left layout
+      @include rtl {
+       background: transparent url("../images/drag-handles.png") no-repeat left center;
+      }
+
+      // CASE: left to right layout
+      @include ltr {
+        background: transparent url("../images/drag-handles.png") no-repeat right center;
+      }
+    }
+
+    &.toggle-action {
+      // TODO: generalize and move checkbox styling in from static-pages and assets sass
     }
   }
 }
 
-// UI: elem is collapsible
+// UI: elem is collapsible - TODO: this should be transitioned away from in favor of %ui-expand-collapse
 %expand-collapse {
   @include transition(all $tmg-f2 linear 0s);
   display: inline-block;
@@ -274,7 +309,7 @@
 
   .ui-toggle-expansion {
     @include transition(all $tmg-f2 ease-in-out 0s);
-    @include font-size(18);
+    @extend %t-action1;
     display: inline-block;
     margin-right: ($baseline/4);
     color: $gray-l3;
@@ -284,6 +319,41 @@
   &.expand .ui-toggle-expansion {
     @include transform(rotate(-90deg));
     @include transform-origin(50% 50%);
+  }
+}
+
+// UI: expand collapse
+%ui-expand-collapse {
+  @include transition(all $tmg-f2 linear 0s);
+
+
+  // CASE: default (is expanded)
+  .ui-toggle-expansion {
+    @include transition(all $tmg-f2 ease-in-out 0s);
+    display: inline-block;
+    vertical-align: middle;
+
+    .icon {
+      @include transition(all $tmg-f2 ease-in-out 0s);
+    }
+
+    // STATE: hover/active
+    &:hover, &:active {
+      cursor: pointer;
+      color: $ui-link-color-focus;
+    }
+  }
+
+  // CASE: is collapsed
+  &.is-collapsed {
+
+    .ui-toggle-expansion {
+
+      .icon {
+        @include transform(rotate(-90deg));
+        @include transform-origin(50% 50%);
+      }
+    }
   }
 }
 
@@ -297,7 +367,7 @@
 
 // UI: elem is draggable
 .is-draggable {
-  @include transition(border-color $tmg-f2 ease-in-out 0, box-shadow $tmg-f2 ease-in-out 0);
+  @include transition(border-color $tmg-f2 ease-in-out 0, box-shadow $tmg-f2 ease-in-out 0, margin $tmg-f2 ease-in-out 0);
   position: relative;
 
   .draggable-drop-indicator {
@@ -337,8 +407,8 @@
 
   // UI: condition - valid drop
   &.valid-drop {
-    border-color: $blue-s1;
-    box-shadow: 0 1px 2px 0 $blue-t2;
+    border-color: $ui-action-primary-color-focus;
+    box-shadow: 0 1px 2px 0 rgba($ui-action-primary-color-focus, 0.50);
   }
 }
 
@@ -351,6 +421,7 @@
 .drop-target {
 
   &.drop-target-before {
+    margin-top: ($baseline*1.5);
 
     > .draggable-drop-indicator-before {
       opacity: 1.0;
@@ -358,9 +429,17 @@
   }
 
   &.drop-target-after {
+    margin-bottom: ($baseline*1.5);
 
     > .draggable-drop-indicator-after {
       opacity: 1.0;
     }
   }
+}
+
+// UI: drop state - was dropped
+.was-dropped {
+  @include animation(was-dropped $tmg-avg ease-in-out 1);
+  border-color: $ui-action-primary-color-focus;
+  box-shadow: 0 1px 2px 0 rgba($ui-action-primary-color-focus, 0.50);
 }

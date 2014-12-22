@@ -5,16 +5,14 @@
 
   .content-primary, .content-supplementary {
     @include box-sizing(border-box);
-    float: left;
   }
 
   .content-primary {
-    width: flex-grid(9,12);
-    margin-right: flex-gutter();
+    @extend .ui-col-wide;
   }
 
   .content-supplementary {
-    width: flex-grid(3,12);
+    @extend .ui-col-narrow;
   }
 
   // UI: export controls
@@ -92,7 +90,7 @@
       }
 
       .file-name {
-        font-weight: bold;
+        @extend %t-strong;
       }
     }
 
@@ -137,7 +135,7 @@
 
         *[class^="icon-"] {
           @include transition(opacity $tmg-f1 ease-in-out 0);
-          @include font-size(22);
+          @extend %t-icon4;
           position: absolute;
           top: ($baseline/2);
           left: $baseline;
@@ -151,7 +149,7 @@
 
         .title {
           @extend %t-title5;
-          font-weight: 600;
+          @extend %t-strong;
         }
 
         .copy {

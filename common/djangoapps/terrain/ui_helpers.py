@@ -1,5 +1,5 @@
-# pylint: disable=C0111
-# pylint: disable=W0621
+# pylint: disable=missing-docstring
+# pylint: disable=redefined-outer-name
 
 from lettuce import world
 
@@ -22,8 +22,9 @@ from selenium.common.exceptions import (
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
-from nose.tools import assert_true  # pylint: disable=E0611
+from nose.tools import assert_true  # pylint: disable=no-name-in-module
 
+GLOBAL_WAIT_FOR_TIMEOUT = 60
 
 REQUIREJS_WAIT = {
     # Settings - Schedule & Details
@@ -36,16 +37,15 @@ REQUIREJS_WAIT = {
         "jquery", "js/base", "js/models/course", "js/models/settings/advanced",
         "js/views/settings/advanced", "codemirror"],
 
-    # Individual Unit (editing)
-    re.compile('^Individual Unit \|'): [
-        "js/base", "coffee/src/views/unit",
-        "coffee/src/views/module_edit"],
+    # Unit page
+    re.compile('^Unit \|'): [
+        "jquery", "js/base", "js/models/xblock_info", "js/views/pages/container",
+        "js/collections/component_template", "xmodule", "coffee/src/main", "xblock/cms.runtime.v1"],
 
     # Content - Outline
     # Note that calling your org, course number, or display name, 'course' will mess this up
     re.compile('^Course Outline \|'): [
-        "js/base", "js/models/course", "js/models/location", "js/models/section",
-        "js/views/overview", "js/views/section_edit"],
+        "js/base", "js/models/course", "js/models/location", "js/models/section"],
 
     # Dashboard
     re.compile('^My Courses \|'): [
@@ -56,7 +56,13 @@ REQUIREJS_WAIT = {
     re.compile(r'^\s*Files & Uploads'): [
         'js/base', 'jquery.ui', 'coffee/src/main', 'underscore',
         'js/views/assets', 'js/views/asset'
-    ]
+    ],
+
+    # Pages
+    re.compile('^Pages \|'): [
+        'js/models/explicit_url', 'coffee/src/views/tabs',
+        'xmodule', 'coffee/src/main', 'xblock/cms.runtime.v1'
+    ],
 }
 
 
@@ -146,24 +152,7 @@ class RequireJSError(Exception):
     pass
 
 
-@world.absorb
-def wait_for_requirejs(dependencies=None):
-    """
-    If requirejs is loaded on the page, this function will pause
-    Selenium until require is finished loading the given dependencies.
-    If requirejs is not loaded on the page, this function will return
-    immediately.
-
-    :param dependencies: a list of strings that identify resources that
-        we should wait for requirejs to load. By default, requirejs will only
-        wait for jquery.
-    """
-    if not dependencies:
-        dependencies = ["jquery"]
-    # stick jquery at the front
-    if dependencies[0] != "jquery":
-        dependencies.insert(0, "jquery")
-
+def load_requrejs_modules(dependencies, callback="callback(true);"):
     javascript = """
         var callback = arguments[arguments.length - 1];
         if(window.require) {{
@@ -174,16 +163,17 @@ def wait_for_requirejs(dependencies=None):
           addEventListener("beforeunload", unloadHandler);
           addEventListener("unload", unloadHandler);
           require({deps}, function($) {{
+            var modules = arguments;
             setTimeout(function() {{
               removeEventListener("beforeunload", unloadHandler);
               removeEventListener("unload", unloadHandler);
-              callback(true);
+              {callback}
             }}, 50);
           }});
         }} else {{
           callback(false);
         }}
-    """.format(deps=json.dumps(dependencies))
+    """.format(deps=json.dumps(dependencies), callback=callback)
     for _ in range(5):  # 5 attempts max
         try:
             result = world.browser.driver.execute_async_script(dedent(javascript))
@@ -214,6 +204,46 @@ def wait_for_requirejs(dependencies=None):
                 raise err
         else:
             return result
+
+
+def wait_for_xmodules_to_load():
+    """
+    If requirejs is loaded on the page, this function will pause
+    Selenium until require is finished loading all xmodules.
+    If requirejs is not loaded on the page, this function will return
+    immediately.
+    """
+    callback = """
+        if (modules[0] && modules[0].done) {{
+            modules[0].done(function () {{callback(true)}});
+        }}
+    """
+    return load_requrejs_modules(["xmodule"], callback)
+
+
+@world.absorb
+def wait_for_requirejs(dependencies=None):
+    """
+    If requirejs is loaded on the page, this function will pause
+    Selenium until require is finished loading the given dependencies.
+    If requirejs is not loaded on the page, this function will return
+    immediately.
+
+    :param dependencies: a list of strings that identify resources that
+        we should wait for requirejs to load. By default, requirejs will only
+        wait for jquery.
+    """
+    if not dependencies:
+        dependencies = ["jquery"]
+    # stick jquery at the front
+    if dependencies[0] != "jquery":
+        dependencies.insert(0, "jquery")
+
+    result = load_requrejs_modules(dependencies)
+    if result and "xmodule" in dependencies:
+        result = wait_for_xmodules_to_load()
+
+    return result
 
 
 @world.absorb
@@ -306,6 +336,25 @@ def css_has_text(css_selector, text, index=0, strip=False):
 
 
 @world.absorb
+def css_contains_text(css_selector, partial_text, index=0):
+    """
+    Return a boolean indicating whether the element with `css_selector`
+    contains `partial_text`.
+
+    If there are multiple elements matching the css selector,
+    use `index` to indicate which one.
+    """
+    # If we're expecting a non-empty string, give the page
+    # a chance to fill in text fields.
+    if partial_text:
+        wait_for(lambda _: css_text(css_selector, index=index))
+
+    actual_text = css_text(css_selector, index=index)
+
+    return partial_text in actual_text
+
+
+@world.absorb
 def css_has_value(css_selector, value, index=0):
     """
     Return a boolean indicating whether the element with
@@ -342,7 +391,7 @@ def wait_for(func, timeout=5, timeout_msg=None):
 
 
 @world.absorb
-def wait_for_present(css_selector, timeout=30):
+def wait_for_present(css_selector, timeout=GLOBAL_WAIT_FOR_TIMEOUT):
     """
     Wait for the element to be present in the DOM.
     """
@@ -354,7 +403,7 @@ def wait_for_present(css_selector, timeout=30):
 
 
 @world.absorb
-def wait_for_visible(css_selector, index=0, timeout=30):
+def wait_for_visible(css_selector, index=0, timeout=GLOBAL_WAIT_FOR_TIMEOUT):
     """
     Wait for the element to be visible in the DOM.
     """
@@ -366,7 +415,7 @@ def wait_for_visible(css_selector, index=0, timeout=30):
 
 
 @world.absorb
-def wait_for_invisible(css_selector, timeout=30):
+def wait_for_invisible(css_selector, timeout=GLOBAL_WAIT_FOR_TIMEOUT):
     """
     Wait for the element to be either invisible or not present on the DOM.
     """
@@ -378,7 +427,7 @@ def wait_for_invisible(css_selector, timeout=30):
 
 
 @world.absorb
-def wait_for_clickable(css_selector, timeout=30):
+def wait_for_clickable(css_selector, timeout=GLOBAL_WAIT_FOR_TIMEOUT):
     """
     Wait for the element to be present and clickable.
     """
@@ -390,7 +439,7 @@ def wait_for_clickable(css_selector, timeout=30):
 
 
 @world.absorb
-def css_find(css, wait_time=30):
+def css_find(css, wait_time=GLOBAL_WAIT_FOR_TIMEOUT):
     """
     Wait for the element(s) as defined by css locator
     to be present.
@@ -402,7 +451,7 @@ def css_find(css, wait_time=30):
 
 
 @world.absorb
-def css_click(css_selector, index=0, wait_time=30, dismiss_alert=False):
+def css_click(css_selector, index=0, wait_time=GLOBAL_WAIT_FOR_TIMEOUT, dismiss_alert=False):
     """
     Perform a click on a CSS selector, first waiting for the element
     to be present and clickable.
@@ -431,7 +480,7 @@ def css_click(css_selector, index=0, wait_time=30, dismiss_alert=False):
 
 
 @world.absorb
-def css_check(css_selector, wait_time=30):
+def css_check(css_selector, wait_time=GLOBAL_WAIT_FOR_TIMEOUT):
     """
     Checks a check box based on a CSS selector, first waiting for the element
     to be present and clickable. This is just a wrapper for calling "click"
@@ -446,7 +495,7 @@ def css_check(css_selector, wait_time=30):
 
 
 @world.absorb
-def select_option(name, value, wait_time=30):
+def select_option(name, value, wait_time=GLOBAL_WAIT_FOR_TIMEOUT):
     '''
     A method to select an option
     Then for synchronization purposes, wait for the option to be selected.
@@ -494,7 +543,7 @@ def click_link_by_text(text, index=0):
 
 
 @world.absorb
-def css_text(css_selector, index=0, timeout=30):
+def css_text(css_selector, index=0, timeout=GLOBAL_WAIT_FOR_TIMEOUT):
     # Wait for the css selector to appear
     if is_css_present(css_selector):
         return retry_on_exception(lambda: css_find(css_selector, wait_time=timeout)[index].text)

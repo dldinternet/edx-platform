@@ -17,6 +17,7 @@ function (VideoPlayer) {
         afterEach(function () {
             $('source').remove();
             window.onTouchBasedDevice = oldOTBD;
+            window.Video.previousState = null;
             if (state.storage) {
                 state.storage.clear();
             }
@@ -140,8 +141,7 @@ function (VideoPlayer) {
 
                         state.videoEl = $('video, iframe');
 
-                        expect(state.videoVolumeControl).toBeUndefined();
-                        expect(state.el.find('div.volume')).not.toExist();
+                        expect(state.el.find('.volume')).not.toExist();
                     });
                 });
             });
@@ -178,6 +178,11 @@ function (VideoPlayer) {
 
             it('autoplay the first video', function () {
                 expect(state.videoPlayer.play).not.toHaveBeenCalled();
+            });
+
+
+            it('invalid endTime is reset to null', function () {
+                expect(state.videoPlayer.endTime).toBe(null);
             });
         });
 
@@ -330,6 +335,7 @@ function (VideoPlayer) {
 
                     state.videoEl = $('video, iframe');
 
+                    spyOn(state.videoPlayer, 'log').andCallThrough();
                     spyOn(state.videoControl, 'pause').andCallThrough();
                     spyOn($.fn, 'trigger').andCallThrough();
 
@@ -345,83 +351,133 @@ function (VideoPlayer) {
                 it('pause the video caption', function () {
                     expect($.fn.trigger).toHaveBeenCalledWith('ended', {});
                 });
+
+                it('log stop_video event', function () {
+                    expect(state.videoPlayer.log).toHaveBeenCalledWith(
+                        'stop_video',
+                        {
+                            currentTime: state.videoPlayer.currentTime
+                        }
+                    );
+                });
             });
         });
 
         describe('onSeek', function () {
             beforeEach(function () {
                 state = jasmine.initializePlayer();
-
                 state.videoEl = $('video, iframe');
-
-                runs(function () {
-                    state.videoPlayer.play();
-                });
-
-                waitsFor(function () {
-                    var duration = state.videoPlayer.duration();
-
-                    return duration > 0 && state.videoPlayer.isPlaying();
-                }, 'video begins playing', WAIT_TIMEOUT);
             });
 
-            it('Slider event causes log update', function () {
-                runs(function () {
-                    spyOn(state.videoPlayer, 'log');
-                    state.videoProgressSlider.onSlide(
-                        jQuery.Event('slide'), { value: 2 }
-                    );
+            describe('when the video is playing', function () {
+                beforeEach(function () {
+                    runs(function () {
+                        state.videoPlayer.play();
+                    });
+
+                    waitsFor(function () {
+                        var duration = state.videoPlayer.duration();
+
+                        return duration > 0 && state.videoPlayer.isPlaying();
+                    }, 'video didn\'t start playing', WAIT_TIMEOUT);
                 });
 
-                waitsFor(function () {
-                    return state.videoPlayer.currentTime >= 2;
-                }, 'currentTime is less than 2 seconds', WAIT_TIMEOUT);
 
-                runs(function () {
-                    expect(state.videoPlayer.log).toHaveBeenCalledWith(
-                        'seek_video',
-                        {
-                            old_time: jasmine.any(Number),
-                            new_time: 2,
-                            type: 'onSlideSeek'
+                it('call runTimer in seekTo on player', function () {
+                    runs(function () {
+                        spyOn(state.videoPlayer, 'stopTimer');
+                        spyOn(state.videoPlayer, 'runTimer');
+                        state.videoPlayer.seekTo(10);
+                    });
+
+                    waitsFor(function () {
+                        return state.videoPlayer.currentTime >= 10;
+                    }, 'currentTime is less than 10 seconds', WAIT_TIMEOUT);
+
+                    runs(function () {
+                        expect(state.videoPlayer.stopTimer)
+                            .toHaveBeenCalled();
+                        expect(state.videoPlayer.runTimer)
+                            .toHaveBeenCalled();
+                    });
+                });
+
+                // as per TNL-439 this test is deemed flaky and needs to be fixed.
+                // disabled 09/18/2014
+                xit('slider event causes log update', function () {
+                    runs(function () {
+                        spyOn(state.videoPlayer, 'log');
+                        state.videoProgressSlider.onSlide(
+                            jQuery.Event('slide'), { value: 2 }
+                        );
+                    });
+
+                    waitsFor(function () {
+                        return state.videoPlayer.currentTime >= 2;
+                    }, 'currentTime is less than 2 seconds', WAIT_TIMEOUT);
+
+                    runs(function () {
+                        // Depending on the browser, the object of arrays may list the
+                        // arrays in a different order. Find the array that is relevent
+                        // to onSeek. Fail if that is not found.
+                        var seekVideoArgIndex
+                        for(var i = 0; i < state.videoPlayer.log.calls.length; i++){
+                            if (state.videoPlayer.log.calls[i].args[0] == 'seek_video') {
+                                seekVideoArgIndex = i
+                                break;
+                            }
                         }
-                    );
-                });
-            });
 
-            it('seek the player', function () {
-                runs(function () {
-                    spyOn(state.videoPlayer.player, 'seekTo').andCallThrough();
-                    state.videoProgressSlider.onSlide(
-                        jQuery.Event('slide'), { value: 30 }
-                    );
-                });
+                        expect(seekVideoArgIndex).toBeDefined;
 
-                waitsFor(function () {
-                    return state.videoPlayer.currentTime >= 30;
-                }, 'currentTime is less than 30 seconds', WAIT_TIMEOUT);
+                        var args = state.videoPlayer.log.calls[seekVideoArgIndex].args;
 
-                runs(function () {
-                    expect(state.videoPlayer.player.seekTo)
-                        .toHaveBeenCalledWith(30, true);
-                });
-            });
-
-            it('call updatePlayTime on player', function () {
-                runs(function () {
-                    spyOn(state.videoPlayer, 'updatePlayTime').andCallThrough();
-                    state.videoProgressSlider.onSlide(
-                        jQuery.Event('slide'), { value: 30 }
-                    );
+                        expect(args[1].old_time).toBeLessThan(2);
+                        expect(args[1].new_time).toBe(2);
+                        expect(args[1].type).toBe('onSlideSeek');
+                    });
                 });
 
-                waitsFor(function () {
-                    return state.videoPlayer.currentTime >= 30;
-                }, 'currentTime is less than 30 seconds', WAIT_TIMEOUT);
+                // as per TNL-439 this test is deemed flaky and needs to be fixed.
+                // disabled 09/18/2014
+                xit('seek the player', function () {
+                    runs(function () {
+                        spyOn(state.videoPlayer.player, 'seekTo')
+                            .andCallThrough();
+                        state.videoProgressSlider.onSlide(
+                            jQuery.Event('slide'), { value: 30 }
+                        );
+                    });
 
-                runs(function () {
-                    expect(state.videoPlayer.updatePlayTime)
-                        .toHaveBeenCalledWith(jasmine.any(Number));
+                    waitsFor(function () {
+                        return state.videoPlayer.currentTime >= 30;
+                    }, 'currentTime is less than 30 seconds', WAIT_TIMEOUT);
+
+                    runs(function () {
+                        expect(state.videoPlayer.player.seekTo)
+                            .toHaveBeenCalledWith(30, true);
+                    });
+                });
+
+                // as per TNL-439 this test is deemed flaky and needs to be fixed.
+                // disabled 09/18/2014
+                xit('call updatePlayTime on player', function () {
+                    runs(function () {
+                        spyOn(state.videoPlayer, 'updatePlayTime')
+                            .andCallThrough();
+                        state.videoProgressSlider.onSlide(
+                            jQuery.Event('slide'), { value: 30 }
+                        );
+                    });
+
+                    waitsFor(function () {
+                        return state.videoPlayer.currentTime >= 30;
+                    }, 'currentTime is less than 30 seconds', WAIT_TIMEOUT);
+
+                    runs(function () {
+                        expect(state.videoPlayer.updatePlayTime)
+                            .toHaveBeenCalledWith(30, true);
+                    });
                 });
             });
 
@@ -444,49 +500,62 @@ function (VideoPlayer) {
                     }, 'currentTime got updated', 10000);
                 });
             });
-        });
 
-        describe('when the video is not playing', function () {
-            beforeEach(function () {
-                state = jasmine.initializePlayer();
+            // as per TNL-439 these tests are deemed flaky and needs to be fixed.
+            // disabled 09/18/2014
+            xdescribe('when the video is not playing', function () {
+                beforeEach(function () {
+                    spyOn(state.videoPlayer, 'setPlaybackRate')
+                        .andCallThrough();
+                });
 
-                spyOn(state.videoPlayer, 'updatePlayTime').andCallThrough();
-                spyOn(state, 'setSpeed').andCallThrough();
-                spyOn(state.videoPlayer, 'log').andCallThrough();
-                spyOn(state.videoPlayer.player, 'setPlaybackRate').andCallThrough();
-                spyOn(state.videoPlayer, 'setPlaybackRate').andCallThrough();
-            });
+                it('slider event causes log update', function () {
+                    runs(function () {
+                        spyOn(state.videoPlayer, 'log');
+                        state.videoProgressSlider.onSlide(
+                            jQuery.Event('slide'), { value: 2 }
+                        );
+                    });
 
-            it('video has a correct speed', function () {
-                state.speed = '2.0';
-                state.videoPlayer.onPlay();
-                expect(state.videoPlayer.setPlaybackRate)
-                    .toHaveBeenCalledWith('2.0');
-                state.videoPlayer.onPlay();
-                expect(state.videoPlayer.setPlaybackRate.calls.length)
-                    .toEqual(1);
-            });
+                    waitsFor(function () {
+                        return state.videoPlayer.currentTime >= 2;
+                    }, 'currentTime is less than 2 seconds', WAIT_TIMEOUT);
 
-            it('video has a correct volume', function () {
-                spyOn(state.videoPlayer.player, 'setVolume');
-                state.currentVolume = '0.26';
-                state.videoPlayer.onPlay();
-                expect(state.videoPlayer.player.setVolume)
-                    .toHaveBeenCalledWith('0.26');
+                    runs(function () {
+                        expect(state.videoPlayer.log).toHaveBeenCalledWith(
+                            'seek_video', {
+                                old_time: 0,
+                                new_time: 2,
+                                type: 'onSlideSeek'
+                            }
+                        );
+                    });
+                });
+
+                it('video has a correct speed', function () {
+                    state.speed = '2.0';
+                    state.videoPlayer.onPlay();
+                    expect(state.videoPlayer.setPlaybackRate)
+                        .toHaveBeenCalledWith('2.0', true);
+                    state.videoPlayer.onPlay();
+                    expect(state.videoPlayer.setPlaybackRate.calls.length)
+                        .toEqual(1);
+                });
             });
         });
 
         describe('onVolumeChange', function () {
             beforeEach(function () {
                 state = jasmine.initializePlayer();
-
+                state.videoPlayer.onReady();
                 state.videoEl = $('video, iframe');
             });
 
             it('set the volume on player', function () {
                 spyOn(state.videoPlayer.player, 'setVolume');
                 state.videoPlayer.onVolumeChange(60);
-                expect(state.videoPlayer.player.setVolume).toHaveBeenCalledWith(60);
+                expect(state.videoPlayer.player.setVolume)
+                    .toHaveBeenCalledWith(60);
             });
 
             describe('when the video is not playing', function () {
@@ -496,10 +565,10 @@ function (VideoPlayer) {
 
                 it('video has a correct volume', function () {
                     spyOn(state.videoPlayer.player, 'setVolume');
-                    state.currentVolume = '0.26';
-                    state.videoPlayer.onPlay();
+                    state.videoVolumeControl.volume = 26;
+                    state.el.trigger('play');
                     expect(state.videoPlayer.player.setVolume)
-                        .toHaveBeenCalledWith('0.26');
+                        .toHaveBeenCalledWith(26);
                 });
             });
         });
@@ -525,7 +594,8 @@ function (VideoPlayer) {
                 });
 
                 it('does not trigger updatePlayTime event', function () {
-                    expect(state.videoPlayer.updatePlayTime).not.toHaveBeenCalled();
+                    expect(state.videoPlayer.updatePlayTime)
+                        .not.toHaveBeenCalled();
                 });
             });
 
@@ -751,17 +821,6 @@ function (VideoPlayer) {
                     browserIsFirefox: false,
                     isFlashMode: jasmine.createSpy().andReturn(false)
                 };
-            });
-
-            it('invalid endTime is reset to null', function () {
-                VideoPlayer.prototype.updatePlayTime.call(state, 0);
-
-                expect(state.videoPlayer.figureOutStartingTime).toHaveBeenCalled();
-
-                VideoPlayer.prototype.figureOutStartEndTime.call(state, 60);
-                VideoPlayer.prototype.figureOutStartingTime.call(state, 60);
-
-                expect(state.videoPlayer.endTime).toBe(null);
             });
         });
 
@@ -1087,9 +1146,12 @@ function (VideoPlayer) {
                     isHtml5Mode: jasmine.createSpy().andReturn(true),
                     isYoutubeType: jasmine.createSpy().andReturn(true),
                     setPlayerMode: jasmine.createSpy(),
+                    trigger: jasmine.createSpy(),
                     videoPlayer: {
                         currentTime: 60,
                         isPlaying: jasmine.createSpy(),
+                        seekTo: jasmine.createSpy(),
+                        duration: jasmine.createSpy().andReturn(60),
                         updatePlayTime: jasmine.createSpy(),
                         setPlaybackRate: jasmine.createSpy(),
                         player: jasmine.createSpyObj('player', [
@@ -1115,6 +1177,12 @@ function (VideoPlayer) {
                 state.videoPlayer.isPlaying.andReturn(false);
                 VideoPlayer.prototype.setPlaybackRate.call(state, '0.75');
                 expect(state.videoPlayer.updatePlayTime).toHaveBeenCalledWith(60);
+                expect(state.videoPlayer.seekTo).toHaveBeenCalledWith(60);
+                expect(state.trigger).toHaveBeenCalledWith(
+                    'videoProgressSlider.updateStartEndTimeRegion',
+                    {
+                        duration: 60
+                    });
                 expect(state.videoPlayer.player.cueVideoById)
                     .toHaveBeenCalledWith('videoId', 60);
             });

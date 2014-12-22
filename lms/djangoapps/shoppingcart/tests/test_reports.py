@@ -3,17 +3,18 @@
 """
 Tests for the Shopping Cart Models
 """
+import datetime
+import pytz
 import StringIO
 from textwrap import dedent
-import pytz
-import datetime
 
 from django.conf import settings
 from django.test.utils import override_settings
 
 from course_modes.models import CourseMode
-from courseware.tests.tests import TEST_DATA_MONGO_MODULESTORE
-from shoppingcart.models import (Order, CertificateItem, PaidCourseRegistration, PaidCourseRegistrationAnnotation)
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
+from shoppingcart.models import (Order, CertificateItem, PaidCourseRegistration, PaidCourseRegistrationAnnotation,
+                                 CourseRegCodeItemAnnotation)
 from shoppingcart.views import initialize_report
 from student.tests.factories import UserFactory
 from student.models import CourseEnrollment
@@ -21,7 +22,7 @@ from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
 
 
-@override_settings(MODULESTORE=TEST_DATA_MONGO_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class ReportTypeTests(ModuleStoreTestCase):
     """
     Tests for the models used to generate certificate status reports
@@ -64,17 +65,17 @@ class ReportTypeTests(ModuleStoreTestCase):
 
         # Two are verified, three are audit, one honor
 
-        self.course_id = "MITx/999/Robot_Super_Course"
-        settings.COURSE_LISTINGS['default'] = [self.course_id]
         self.cost = 40
         self.course = CourseFactory.create(org='MITx', number='999', display_name=u'Robot Super Course')
-        course_mode = CourseMode(course_id=self.course_id,
+        self.course_key = self.course.id
+        settings.COURSE_LISTINGS['default'] = [self.course_key.to_deprecated_string()]
+        course_mode = CourseMode(course_id=self.course_key,
                                  mode_slug="honor",
                                  mode_display_name="honor cert",
                                  min_price=self.cost)
         course_mode.save()
 
-        course_mode2 = CourseMode(course_id=self.course_id,
+        course_mode2 = CourseMode(course_id=self.course_key,
                                   mode_slug="verified",
                                   mode_display_name="verified cert",
                                   min_price=self.cost)
@@ -82,33 +83,33 @@ class ReportTypeTests(ModuleStoreTestCase):
 
         # User 1 & 2 will be verified
         self.cart1 = Order.get_cart_for_user(self.first_verified_user)
-        CertificateItem.add_to_order(self.cart1, self.course_id, self.cost, 'verified')
+        CertificateItem.add_to_order(self.cart1, self.course_key, self.cost, 'verified')
         self.cart1.purchase()
 
         self.cart2 = Order.get_cart_for_user(self.second_verified_user)
-        CertificateItem.add_to_order(self.cart2, self.course_id, self.cost, 'verified')
+        CertificateItem.add_to_order(self.cart2, self.course_key, self.cost, 'verified')
         self.cart2.purchase()
 
         # Users 3, 4, and 5 are audit
-        CourseEnrollment.enroll(self.first_audit_user, self.course_id, "audit")
-        CourseEnrollment.enroll(self.second_audit_user, self.course_id, "audit")
-        CourseEnrollment.enroll(self.third_audit_user, self.course_id, "audit")
+        CourseEnrollment.enroll(self.first_audit_user, self.course_key, "audit")
+        CourseEnrollment.enroll(self.second_audit_user, self.course_key, "audit")
+        CourseEnrollment.enroll(self.third_audit_user, self.course_key, "audit")
 
         # User 6 is honor
-        CourseEnrollment.enroll(self.honor_user, self.course_id, "honor")
+        CourseEnrollment.enroll(self.honor_user, self.course_key, "honor")
 
         self.now = datetime.datetime.now(pytz.UTC)
 
         # Users 7 & 8 are refunds
         self.cart = Order.get_cart_for_user(self.first_refund_user)
-        CertificateItem.add_to_order(self.cart, self.course_id, self.cost, 'verified')
+        CertificateItem.add_to_order(self.cart, self.course_key, self.cost, 'verified')
         self.cart.purchase()
-        CourseEnrollment.unenroll(self.first_refund_user, self.course_id)
+        CourseEnrollment.unenroll(self.first_refund_user, self.course_key)
 
         self.cart = Order.get_cart_for_user(self.second_refund_user)
-        CertificateItem.add_to_order(self.cart, self.course_id, self.cost, 'verified')
-        self.cart.purchase(self.second_refund_user, self.course_id)
-        CourseEnrollment.unenroll(self.second_refund_user, self.course_id)
+        CertificateItem.add_to_order(self.cart, self.course_key, self.cost, 'verified')
+        self.cart.purchase(self.second_refund_user, self.course_key)
+        CourseEnrollment.unenroll(self.second_refund_user, self.course_key)
 
         self.test_time = datetime.datetime.now(pytz.UTC)
 
@@ -148,8 +149,8 @@ class ReportTypeTests(ModuleStoreTestCase):
             num_certs += 1
         self.assertEqual(num_certs, 2)
 
-        self.assertTrue(CertificateItem.objects.get(user=self.first_refund_user, course_id=self.course_id))
-        self.assertTrue(CertificateItem.objects.get(user=self.second_refund_user, course_id=self.course_id))
+        self.assertTrue(CertificateItem.objects.get(user=self.first_refund_user, course_id=self.course_key))
+        self.assertTrue(CertificateItem.objects.get(user=self.second_refund_user, course_id=self.course_key))
 
     def test_refund_report_purchased_csv(self):
         """
@@ -178,7 +179,7 @@ class ReportTypeTests(ModuleStoreTestCase):
         self.assertEqual(csv.replace('\r\n', '\n').strip(), self.CORRECT_UNI_REVENUE_SHARE_CSV.strip())
 
 
-@override_settings(MODULESTORE=TEST_DATA_MONGO_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class ItemizedPurchaseReportTest(ModuleStoreTestCase):
     """
     Tests for the models used to generate itemized purchase reports
@@ -188,33 +189,35 @@ class ItemizedPurchaseReportTest(ModuleStoreTestCase):
 
     def setUp(self):
         self.user = UserFactory.create()
-        self.course_id = "MITx/999/Robot_Super_Course"
         self.cost = 40
         self.course = CourseFactory.create(org='MITx', number='999', display_name=u'Robot Super Course')
-        course_mode = CourseMode(course_id=self.course_id,
+        self.course_key = self.course.id
+        course_mode = CourseMode(course_id=self.course_key,
                                  mode_slug="honor",
                                  mode_display_name="honor cert",
                                  min_price=self.cost)
         course_mode.save()
-        course_mode2 = CourseMode(course_id=self.course_id,
+        course_mode2 = CourseMode(course_id=self.course_key,
                                   mode_slug="verified",
                                   mode_display_name="verified cert",
                                   min_price=self.cost)
         course_mode2.save()
-        self.annotation = PaidCourseRegistrationAnnotation(course_id=self.course_id, annotation=self.TEST_ANNOTATION)
+        self.annotation = PaidCourseRegistrationAnnotation(course_id=self.course_key, annotation=self.TEST_ANNOTATION)
         self.annotation.save()
+        self.course_reg_code_annotation = CourseRegCodeItemAnnotation(course_id=self.course_key, annotation=self.TEST_ANNOTATION)
+        self.course_reg_code_annotation.save()
         self.cart = Order.get_cart_for_user(self.user)
-        self.reg = PaidCourseRegistration.add_to_order(self.cart, self.course_id)
-        self.cert_item = CertificateItem.add_to_order(self.cart, self.course_id, self.cost, 'verified')
+        self.reg = PaidCourseRegistration.add_to_order(self.cart, self.course_key)
+        self.cert_item = CertificateItem.add_to_order(self.cart, self.course_key, self.cost, 'verified')
         self.cart.purchase()
         self.now = datetime.datetime.now(pytz.UTC)
 
-        paid_reg = PaidCourseRegistration.objects.get(course_id=self.course_id, user=self.user)
+        paid_reg = PaidCourseRegistration.objects.get(course_id=self.course_key, user=self.user)
         paid_reg.fulfilled_time = self.now
         paid_reg.refund_requested_time = self.now
         paid_reg.save()
 
-        cert = CertificateItem.objects.get(course_id=self.course_id, user=self.user)
+        cert = CertificateItem.objects.get(course_id=self.course_key, user=self.user)
         cert.fulfilled_time = self.now
         cert.refund_requested_time = self.now
         cert.save()
@@ -222,7 +225,7 @@ class ItemizedPurchaseReportTest(ModuleStoreTestCase):
         self.CORRECT_CSV = dedent("""
             Purchase Time,Order ID,Status,Quantity,Unit Cost,Total Cost,Currency,Description,Comments
             {time_str},1,purchased,1,40,40,usd,Registration for Course: Robot Super Course,Ba\xc3\xbc\xe5\x8c\x85
-            {time_str},1,purchased,1,40,40,usd,"Certificate of Achievement, verified cert for course Robot Super Course",
+            {time_str},1,purchased,1,40,40,usd,verified cert for course Robot Super Course,
             """.format(time_str=str(self.now)))
 
     def test_purchased_items_btw_dates(self):
@@ -268,4 +271,10 @@ class ItemizedPurchaseReportTest(ModuleStoreTestCase):
         """
         Fill in gap in test coverage.  __unicode__ method of PaidCourseRegistrationAnnotation
         """
-        self.assertEqual(unicode(self.annotation), u'{} : {}'.format(self.course_id, self.TEST_ANNOTATION))
+        self.assertEqual(unicode(self.annotation), u'{} : {}'.format(self.course_key.to_deprecated_string(), self.TEST_ANNOTATION))
+
+    def test_courseregcodeitemannotationannotation_unicode(self):
+        """
+        Fill in gap in test coverage.  __unicode__ method of CourseRegCodeItemAnnotation
+        """
+        self.assertEqual(unicode(self.course_reg_code_annotation), u'{} : {}'.format(self.course_key.to_deprecated_string(), self.TEST_ANNOTATION))

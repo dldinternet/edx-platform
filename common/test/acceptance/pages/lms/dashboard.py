@@ -21,6 +21,11 @@ class DashboardPage(PageObject):
 
     @property
     def current_courses_text(self):
+        """
+        This is the title label for the section of the student dashboard that
+        shows all the courses that the student is enrolled in.
+        The string displayed is defined in lms/templates/dashboard.html.
+        """
         text_items = self.q(css='section#my-courses').text
         if len(text_items) > 0:
             return text_items[0]
@@ -86,5 +91,7 @@ class DashboardPage(PageObject):
 
     def _changed_lang_promise(self, code):
         def _check_func():
-            return self.q(css='select[name="language"] option[value="{}"]'.format(code)).selected
-        return EmptyPromise(_check_func, "language changed")
+            language_is_selected = self.q(css='select[name="language"] option[value="{}"]'.format(code)).selected
+            modal_is_visible = self.q(css='section#change_language.modal').visible
+            return (language_is_selected and not modal_is_visible)
+        return EmptyPromise(_check_func, "language changed and modal hidden")

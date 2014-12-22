@@ -1,136 +1,79 @@
 if Backbone?
   class @NewPostView extends Backbone.View
 
-      initialize: () ->
-          @dropdownButton = @$(".topic_dropdown_button")
-          @topicMenu      = @$(".topic_menu_wrapper")
+      initialize: (options) ->
+          @mode = options.mode or "inline"  # allowed values are "tab" or "inline"
+          if @mode not in ["tab", "inline"]
+              throw new Error("invalid mode: " + @mode)
+          @course_settings = options.course_settings
+          @topicId = options.topicId
 
-          @menuOpen = @dropdownButton.hasClass('dropped')
+      render: () ->
+          context = _.clone(@course_settings.attributes)
+          _.extend(context, {
+              cohort_options: @getCohortOptions(),
+              mode: @mode,
+              form_id: @mode + (if @topicId then "-" + @topicId else "")
+          })
+          @$el.html(_.template($("#new-post-template").html(), context))
+          threadTypeTemplate = _.template($("#thread-type-template").html());
+          @addField(threadTypeTemplate({form_id: _.uniqueId("form-")}));
+          if @isTabMode()
+              @topicView = new DiscussionTopicMenuView {
+                  topicId:  @topicId
+                  course_settings: @course_settings
+              }
+              @topicView.on('thread:topic_change', @toggleGroupDropdown)
+              @addField(@topicView.render())
+          DiscussionUtil.makeWmdEditor @$el, $.proxy(@$, @), "js-post-body"
 
-          @topicId    = @$(".topic").first().data("discussion_id")
-          @topicText  = @getFullTopicName(@$(".topic").first())
+      addField: (fieldView) ->
+          @$('.forum-new-post-form-wrapper').append fieldView
 
-          @maxNameWidth = 100
-          @setSelectedTopic()
+      isTabMode: () ->
+          @mode is "tab"
 
-          DiscussionUtil.makeWmdEditor @$el, $.proxy(@$, @), "new-post-body"
-          
-          if @$($(".topic_menu li a")[0]).attr('cohorted') != "True"
-            $('.choose-cohort').hide();
-          
-            
-          
-      events:
-          "submit .new-post-form":            "createPost"
-          "click  .topic_dropdown_button":    "toggleTopicDropdown"
-          "click  .topic_menu_wrapper":       "setTopic"
-          "click  .topic_menu_search":        "ignoreClick"
-          "keyup .form-topic-drop-search-input": DiscussionFilter.filterDrop
-
-      # Because we want the behavior that when the body is clicked the menu is
-      # closed, we need to ignore clicks in the search field and stop propagation.
-      # Without this, clicking the search field would also close the menu.
-      ignoreClick: (event) ->
-          event.stopPropagation()
-
-      toggleTopicDropdown: (event) ->
-          event.stopPropagation()
-          if @menuOpen
-              @hideTopicDropdown()
+      getCohortOptions: () ->
+          if @course_settings.get("is_cohorted") and DiscussionUtil.isPrivilegedUser()
+              user_cohort_id = $("#discussion-container").data("user-cohort-id")
+              _.map @course_settings.get("cohorts"), (cohort) ->
+                  {value: cohort.id, text: cohort.name, selected: cohort.id==user_cohort_id}
           else
-              @showTopicDropdown()
+              null
 
-      showTopicDropdown: () ->
-          @menuOpen = true
-          @dropdownButton.addClass('dropped')
-          @topicMenu.show()
-          $(".form-topic-drop-search-input").focus()
+      events:
+          "submit .forum-new-post-form": "createPost"
+          "change .post-option-input": "postOptionChange"
+          "click .cancel": "cancel"
+          "reset .forum-new-post-form": "updateStyles"
 
-          $("body").bind "keydown", @setActiveItem
-          $("body").bind "click", @hideTopicDropdown
+      toggleGroupDropdown: ($target) ->
+        if $target.data('cohorted')
+            $('.js-group-select').prop('disabled', false);
+        else
+            $('.js-group-select').val('').prop('disabled', true);
 
-          # Set here because 1) the window might get resized and things could
-          # change and 2) can't set in initialize because the button is hidden
-          @maxNameWidth = @dropdownButton.width() * 0.9
-
-      # Need a fat arrow because hideTopicDropdown is passed as a callback to bind
-      hideTopicDropdown: () =>
-          @menuOpen = false
-          @dropdownButton.removeClass('dropped')
-          @topicMenu.hide()
-
-          $("body").unbind "keydown", @setActiveItem
-          $("body").unbind "click", @hideTopicDropdown
-
-      setTopic: (event) ->
+      postOptionChange: (event) ->
           $target = $(event.target)
-          if $target.data('discussion_id')
-              @topicText = $target.html()
-              @topicText  = @getFullTopicName($target)
-              @topicId   = $target.data('discussion_id')
-              @setSelectedTopic()
-              if $target.attr('cohorted') == "True"
-                $('.choose-cohort').show();
-              else
-                $('.choose-cohort').hide();
-              
-
-      setSelectedTopic: ->
-          @dropdownButton.html(@fitName(@topicText) + ' <span class="drop-arrow">▾</span>')
-
-      getFullTopicName: (topicElement) ->
-          name = topicElement.html()
-          topicElement.parents('ul').not('.topic_menu').each ->
-              name = $(this).siblings('a').html() + ' / ' + name
-          return name
-
-      getNameWidth: (name) ->
-          test = $("<div>")
-          test.css
-              "font-size": @dropdownButton.css('font-size')
-              opacity: 0
-              position: 'absolute'
-              left: -1000
-              top: -1000
-          $("body").append(test)
-          test.html(name)
-          width = test.width()
-          test.remove()
-          return width
-
-      fitName: (name) ->
-          width = @getNameWidth(name)
-          if width < @maxNameWidth
-              return name
-          path = (x.replace /^\s+|\s+$/g, "" for x in name.split("/"))
-          while path.length > 1
-              path.shift()
-              partialName = gettext("…") + " / " + path.join(" / ")
-              if  @getNameWidth(partialName) < @maxNameWidth
-                  return partialName
-
-          rawName = path[0]
-
-          name = gettext("…") + " / " + rawName
-
-          while @getNameWidth(name) > @maxNameWidth
-              rawName = rawName[0...rawName.length-1]
-              name =  gettext("…") + " / " + rawName + " " + gettext("…")
-
-          return name
-
+          $optionElem = $target.closest(".post-option")
+          if $target.is(":checked")
+              $optionElem.addClass("is-enabled")
+          else
+              $optionElem.removeClass("is-enabled")
 
       createPost: (event) ->
           event.preventDefault()
-          title   = @$(".new-post-title").val()
-          body    = @$(".new-post-body").find(".wmd-input").val()
-          group = @$(".new-post-group option:selected").attr("value")
+          thread_type = @$(".post-type-input:checked").val()
+          title   = @$(".js-post-title").val()
+          body    = @$(".js-post-body").find(".wmd-input").val()
+          group   = @$(".js-group-select option:selected").attr("value")
 
-          anonymous          = false || @$("input.discussion-anonymous").is(":checked")
-          anonymous_to_peers = false || @$("input.discussion-anonymous-to-peers").is(":checked")
-          follow             = false || @$("input.discussion-follow").is(":checked")
+          anonymous          = false || @$(".js-anon").is(":checked")
+          anonymous_to_peers = false || @$(".js-anon-peers").is(":checked")
+          follow             = false || @$(".js-follow").is(":checked")
 
-          url = DiscussionUtil.urlFor('create_thread', @topicId)
+          topicId = if @isTabMode() then @topicView.getCurrentTopicId() else @topicId
+          url = DiscussionUtil.urlFor('create_thread', topicId)
 
           DiscussionUtil.safeAjax
               $elem: $(event.target)
@@ -140,45 +83,38 @@ if Backbone?
               dataType: 'json'
               async: false # TODO when the rest of the stuff below is made to work properly..
               data:
+                  thread_type: thread_type
                   title: title
                   body: body
                   anonymous: anonymous
                   anonymous_to_peers: anonymous_to_peers
                   auto_subscribe: follow
                   group_id: group
-              error: DiscussionUtil.formErrorHandler(@$(".new-post-form-errors"))
+              error: DiscussionUtil.formErrorHandler(@$(".post-errors"))
               success: (response, textStatus) =>
                   # TODO: Move this out of the callback, this makes it feel sluggish
                   thread = new Thread response['content']
-                  DiscussionUtil.clearFormErrors(@$(".new-post-form-errors"))
                   @$el.hide()
-                  @$(".new-post-title").val("").attr("prev-text", "")
-                  @$(".new-post-body textarea").val("").attr("prev-text", "")
-                  @$(".wmd-preview p").html("")
+                  @resetForm()
                   @collection.add thread
 
-      setActiveItem: (event) ->
-          if event.which == 13
-            $(".topic_menu_wrapper .focused").click()
-            return
-          if event.which != 40 && event.which != 38
-            return
-          event.preventDefault()
+      cancel: (event) ->
+        event.preventDefault()
+        if not confirm gettext("Your post will be discarded.")
+          return
+        @trigger('newPost:cancel')
+        @resetForm()
 
-          items = $.makeArray($(".topic_menu_wrapper a").not(".hidden"))
-          index = items.indexOf($('.topic_menu_wrapper .focused')[0])
+      resetForm: =>
+        @$(".forum-new-post-form")[0].reset()
+        DiscussionUtil.clearFormErrors(@$(".post-errors"))
+        @$(".wmd-preview p").html("")
+        if @isTabMode()
+          @topicView.setTopic(@$("a.topic-title").first())
 
-          if event.which == 40
-              index = Math.min(index + 1, items.length - 1)
-          if event.which == 38
-              index = Math.max(index - 1, 0)
-
-          $(".topic_menu_wrapper .focused").removeClass("focused")
-          $(items[index]).addClass("focused")
-
-          itemTop = $(items[index]).parent().offset().top
-          scrollTop = $(".topic_menu").scrollTop()
-          itemFromTop = $(".topic_menu").offset().top - itemTop
-          scrollTarget = Math.min(scrollTop - itemFromTop, scrollTop)
-          scrollTarget = Math.max(scrollTop - itemFromTop - $(".topic_menu").height() + $(items[index]).height() + 20, scrollTarget)
-          $(".topic_menu").scrollTop(scrollTarget)
+      updateStyles: =>
+        # form reset doesn't change the style of checkboxes so this event is to do that job
+        setTimeout(
+          (=> @$(".post-option-input").trigger("change")),
+          1
+        )

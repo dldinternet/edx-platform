@@ -1,3 +1,4 @@
+"""Tests for the FoldIt module"""
 import json
 import logging
 from functools import partial
@@ -8,42 +9,37 @@ from django.core.urlresolvers import reverse
 
 from foldit.views import foldit_ops, verify_code
 from foldit.models import PuzzleComplete, Score
-from student.models import unique_id_for_user
-from student.tests.factories import CourseEnrollmentFactory, UserFactory
+from student.models import unique_id_for_user, CourseEnrollment
+from student.tests.factories import UserFactory
 
 from datetime import datetime, timedelta
 from pytz import UTC
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
 log = logging.getLogger(__name__)
 
 
 class FolditTestCase(TestCase):
-
+    """Tests for various responses of the FoldIt module"""
     def setUp(self):
         self.factory = RequestFactory()
         self.url = reverse('foldit_ops')
 
-        self.course_id = 'course/id/1'
-        self.course_id2 = 'course/id/2'
+        self.course_id = SlashSeparatedCourseKey('course', 'id', '1')
+        self.course_id2 = SlashSeparatedCourseKey('course', 'id', '2')
 
         self.user = UserFactory.create()
         self.user2 = UserFactory.create()
 
-        self.course_enrollment = CourseEnrollmentFactory.create(
-            user=self.user, course_id=self.course_id
-        )
-        self.course_enrollment2 = CourseEnrollmentFactory.create(
-            user=self.user2, course_id=self.course_id2
-        )
+        CourseEnrollment.enroll(self.user, self.course_id)
+        CourseEnrollment.enroll(self.user2, self.course_id2)
 
         now = datetime.now(UTC)
         self.tomorrow = now + timedelta(days=1)
         self.yesterday = now - timedelta(days=1)
 
-        self.user.profile
-        self.user2.profile
-
     def make_request(self, post_data, user=None):
+        """Makes a request to foldit_ops with the given post data and user (if specified)"""
         request = self.factory.post(self.url, post_data)
         request.user = self.user if not user else user
         return request
@@ -60,6 +56,7 @@ class FolditTestCase(TestCase):
         user = self.user if not user else user
 
         def score_dict(puzzle_id, best_score):
+            """Returns a valid json-parsable score dict"""
             return {"PuzzleID": puzzle_id,
                     "ScoreType": "score",
                     "BestScore": best_score,
@@ -80,7 +77,7 @@ class FolditTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         return response
 
-    def test_SetPlayerPuzzleScores(self):
+    def test_SetPlayerPuzzleScores(self):  # pylint: disable=invalid-name
 
         puzzle_id = 994391
         best_score = 0.078034
@@ -97,7 +94,7 @@ class FolditTestCase(TestCase):
         self.assertEqual(len(top_10), 1)
         self.assertEqual(top_10[0]['score'], Score.display_score(best_score))
 
-    def test_SetPlayerPuzzleScores_many(self):
+    def test_SetPlayerPuzzleScores_many(self):  # pylint: disable=invalid-name
 
         response = self.make_puzzle_score_request([1, 2], [0.078034, 0.080000])
 
@@ -116,15 +113,14 @@ class FolditTestCase(TestCase):
             }]
         ))
 
-
-    def test_SetPlayerPuzzleScores_multiple(self):
+    def test_SetPlayerPuzzleScores_multiple(self):  # pylint: disable=invalid-name
         """
         Check that multiple posts with the same id are handled properly
         (keep latest for each user, have multiple users work properly)
         """
         orig_score = 0.07
         puzzle_id = '1'
-        response = self.make_puzzle_score_request([puzzle_id], [orig_score])
+        self.make_puzzle_score_request([puzzle_id], [orig_score])
 
         # There should now be a score in the db.
         top_10 = Score.get_tops_n(10, puzzle_id)
@@ -133,7 +129,7 @@ class FolditTestCase(TestCase):
 
         # Reporting a better score should overwrite
         better_score = 0.06
-        response = self.make_puzzle_score_request([1], [better_score])
+        self.make_puzzle_score_request([1], [better_score])
 
         top_10 = Score.get_tops_n(10, puzzle_id)
         self.assertEqual(len(top_10), 1)
@@ -147,7 +143,7 @@ class FolditTestCase(TestCase):
 
         # reporting a worse score shouldn't
         worse_score = 0.065
-        response = self.make_puzzle_score_request([1], [worse_score])
+        self.make_puzzle_score_request([1], [worse_score])
 
         top_10 = Score.get_tops_n(10, puzzle_id)
         self.assertEqual(len(top_10), 1)
@@ -158,7 +154,7 @@ class FolditTestCase(TestCase):
             delta=0.5
         )
 
-    def test_SetPlayerPuzzleScores_multiplecourses(self):
+    def test_SetPlayerPuzzleScores_multiple_courses(self):  # pylint: disable=invalid-name
         puzzle_id = "1"
 
         player1_score = 0.05
@@ -167,9 +163,8 @@ class FolditTestCase(TestCase):
         course_list_1 = [self.course_id]
         course_list_2 = [self.course_id2]
 
-        response1 = self.make_puzzle_score_request(
-            puzzle_id, player1_score, self.user
-        )
+        self.make_puzzle_score_request(puzzle_id, player1_score, self.user)
+
         course_1_top_10 = Score.get_tops_n(10, puzzle_id, course_list_1)
         course_2_top_10 = Score.get_tops_n(10, puzzle_id, course_list_2)
         total_top_10 = Score.get_tops_n(10, puzzle_id)
@@ -179,9 +174,8 @@ class FolditTestCase(TestCase):
         self.assertEqual(len(course_2_top_10), 0)
         self.assertEqual(len(total_top_10), 1)
 
-        response2 = self.make_puzzle_score_request(
-            puzzle_id, player2_score, self.user2
-        )
+        self.make_puzzle_score_request(puzzle_id, player2_score, self.user2)
+
         course_2_top_10 = Score.get_tops_n(10, puzzle_id, course_list_2)
         total_top_10 = Score.get_tops_n(10, puzzle_id)
 
@@ -190,7 +184,7 @@ class FolditTestCase(TestCase):
         self.assertEqual(len(course_2_top_10), 1)
         self.assertEqual(len(total_top_10), 2)
 
-    def test_SetPlayerPuzzleScores_manyplayers(self):
+    def test_SetPlayerPuzzleScores_many_players(self):  # pylint: disable=invalid-name
         """
         Check that when we send scores from multiple users, the correct order
         of scores is displayed. Note that, before being processed by
@@ -199,18 +193,14 @@ class FolditTestCase(TestCase):
         puzzle_id = ['1']
         player1_score = 0.08
         player2_score = 0.02
-        response1 = self.make_puzzle_score_request(
-            puzzle_id, player1_score, self.user
-        )
+        self.make_puzzle_score_request(puzzle_id, player1_score, self.user)
 
         # There should now be a score in the db.
         top_10 = Score.get_tops_n(10, puzzle_id)
         self.assertEqual(len(top_10), 1)
         self.assertEqual(top_10[0]['score'], Score.display_score(player1_score))
 
-        response2 = self.make_puzzle_score_request(
-            puzzle_id, player2_score, self.user2
-        )
+        self.make_puzzle_score_request(puzzle_id, player2_score, self.user2)
 
         # There should now be two scores in the db
         top_10 = Score.get_tops_n(10, puzzle_id)
@@ -231,31 +221,35 @@ class FolditTestCase(TestCase):
         # Top score user should be self.user2.username
         self.assertEqual(top_10[0]['username'], self.user2.username)
 
-    def test_SetPlayerPuzzleScores_error(self):
+    def test_SetPlayerPuzzleScores_error(self):  # pylint: disable=invalid-name
 
-        scores = [{"PuzzleID": 994391,
-                    "ScoreType": "score",
-                    "BestScore": 0.078034,
-                    "CurrentScore": 0.080035,
-                    "ScoreVersion": 23}]
+        scores = [{
+            "PuzzleID": 994391,
+            "ScoreType": "score",
+            "BestScore": 0.078034,
+            "CurrentScore": 0.080035,
+            "ScoreVersion": 23
+        }]
         validation_str = json.dumps(scores)
 
-        verify = {"Verify": verify_code(self.user.email, validation_str),
-                  "VerifyMethod": "FoldItVerify"}
+        verify = {
+            "Verify": verify_code(self.user.email, validation_str),
+            "VerifyMethod": "FoldItVerify"
+        }
 
         # change the real string -- should get an error
         scores[0]['ScoreVersion'] = 22
         scores_str = json.dumps(scores)
 
-        data = {'SetPlayerPuzzleScoresVerify': json.dumps(verify),
-                'SetPlayerPuzzleScores': scores_str}
+        data = {
+            'SetPlayerPuzzleScoresVerify': json.dumps(verify),
+            'SetPlayerPuzzleScores': scores_str
+        }
 
         request = self.make_request(data)
 
         response = foldit_ops(request)
         self.assertEqual(response.status_code, 200)
-
-        response_data = json.loads(response.content)
 
         self.assertEqual(response.content,
                          json.dumps([{
@@ -263,7 +257,6 @@ class FolditTestCase(TestCase):
                              "Success": "false",
                              "ErrorString": "Verification failed",
                              "ErrorCode": "VerifyFailed"}]))
-
 
     def make_puzzles_complete_request(self, puzzles):
         """
@@ -275,11 +268,15 @@ class FolditTestCase(TestCase):
         """
         puzzles_str = json.dumps(puzzles)
 
-        verify = {"Verify": verify_code(self.user.email, puzzles_str),
-                  "VerifyMethod":"FoldItVerify"}
+        verify = {
+            "Verify": verify_code(self.user.email, puzzles_str),
+            "VerifyMethod": "FoldItVerify"
+        }
 
-        data = {'SetPuzzlesCompleteVerify': json.dumps(verify),
-                'SetPuzzlesComplete': puzzles_str}
+        data = {
+            'SetPuzzlesCompleteVerify': json.dumps(verify),
+            'SetPuzzlesComplete': puzzles_str
+        }
 
         request = self.make_request(data)
 
@@ -289,56 +286,64 @@ class FolditTestCase(TestCase):
 
     @staticmethod
     def set_puzzle_complete_response(values):
-        return json.dumps([{"OperationID":"SetPuzzlesComplete",
+        """Returns a json response of a Puzzle Complete message"""
+        return json.dumps([{"OperationID": "SetPuzzlesComplete",
                             "Value": values}])
 
+    def test_SetPlayerPuzzlesComplete(self):  # pylint: disable=invalid-name
 
-    def test_SetPlayerPuzzlesComplete(self):
-
-        puzzles = [ {"PuzzleID": 13, "Set": 1, "SubSet": 2},
-                    {"PuzzleID": 53524, "Set": 1, "SubSet": 1} ]
+        puzzles = [
+            {"PuzzleID": 13, "Set": 1, "SubSet": 2},
+            {"PuzzleID": 53524, "Set": 1, "SubSet": 1}
+        ]
 
         response = self.make_puzzles_complete_request(puzzles)
 
         self.assertEqual(response.content,
                          self.set_puzzle_complete_response([13, 53524]))
 
-
-
-    def test_SetPlayerPuzzlesComplete_multiple(self):
+    def test_SetPlayerPuzzlesComplete_multiple(self):  # pylint: disable=invalid-name
         """Check that state is stored properly"""
 
-        puzzles = [ {"PuzzleID": 13, "Set": 1, "SubSet": 2},
-                    {"PuzzleID": 53524, "Set": 1, "SubSet": 1} ]
+        puzzles = [
+            {"PuzzleID": 13, "Set": 1, "SubSet": 2},
+            {"PuzzleID": 53524, "Set": 1, "SubSet": 1}
+        ]
 
         response = self.make_puzzles_complete_request(puzzles)
 
         self.assertEqual(response.content,
                          self.set_puzzle_complete_response([13, 53524]))
 
-        puzzles = [ {"PuzzleID": 14, "Set": 1, "SubSet": 3},
-                    {"PuzzleID": 15, "Set": 1, "SubSet": 1} ]
+        puzzles = [
+            {"PuzzleID": 14, "Set": 1, "SubSet": 3},
+            {"PuzzleID": 15, "Set": 1, "SubSet": 1}
+        ]
 
         response = self.make_puzzles_complete_request(puzzles)
 
-        self.assertEqual(response.content,
-                         self.set_puzzle_complete_response([13, 14, 15, 53524]))
+        self.assertEqual(
+            response.content,
+            self.set_puzzle_complete_response([13, 14, 15, 53524])
+        )
 
-
-
-    def test_SetPlayerPuzzlesComplete_level_complete(self):
+    def test_SetPlayerPuzzlesComplete_level_complete(self):  # pylint: disable=invalid-name
         """Check that the level complete function works"""
 
-        puzzles = [ {"PuzzleID": 13, "Set": 1, "SubSet": 2},
-                    {"PuzzleID": 53524, "Set": 1, "SubSet": 1} ]
+        puzzles = [
+            {"PuzzleID": 13, "Set": 1, "SubSet": 2},
+            {"PuzzleID": 53524, "Set": 1, "SubSet": 1}
+        ]
 
         response = self.make_puzzles_complete_request(puzzles)
 
         self.assertEqual(response.content,
                          self.set_puzzle_complete_response([13, 53524]))
 
-        puzzles = [ {"PuzzleID": 14, "Set": 1, "SubSet": 3},
-                    {"PuzzleID": 15, "Set": 1, "SubSet": 1} ]
+        puzzles = [
+            {"PuzzleID": 14, "Set": 1, "SubSet": 3},
+            {"PuzzleID": 15, "Set": 1, "SubSet": 1}
+        ]
 
         response = self.make_puzzles_complete_request(puzzles)
 
@@ -353,7 +358,7 @@ class FolditTestCase(TestCase):
         self.assertTrue(is_complete(1, 2))
         self.assertFalse(is_complete(4, 5))
 
-        puzzles = [ {"PuzzleID": 74, "Set": 4, "SubSet": 5} ]
+        puzzles = [{"PuzzleID": 74, "Set": 4, "SubSet": 5}]
 
         response = self.make_puzzles_complete_request(puzzles)
 
@@ -364,27 +369,29 @@ class FolditTestCase(TestCase):
         self.assertTrue(is_complete(1, 1, due=self.tomorrow))
         self.assertFalse(is_complete(1, 1, due=self.yesterday))
 
+    def test_SetPlayerPuzzlesComplete_error(self):  # pylint: disable=invalid-name
 
-
-    def test_SetPlayerPuzzlesComplete_error(self):
-
-        puzzles = [ {"PuzzleID": 13, "Set": 1, "SubSet": 2},
-                    {"PuzzleID": 53524, "Set": 1, "SubSet": 1} ]
+        puzzles = [
+            {"PuzzleID": 13, "Set": 1, "SubSet": 2},
+            {"PuzzleID": 53524, "Set": 1, "SubSet": 1}
+        ]
 
         puzzles_str = json.dumps(puzzles)
 
-        verify = {"Verify": verify_code(self.user.email, puzzles_str + "x"),
-                  "VerifyMethod":"FoldItVerify"}
+        verify = {
+            "Verify": verify_code(self.user.email, puzzles_str + "x"),
+            "VerifyMethod": "FoldItVerify"
+        }
 
-        data = {'SetPuzzlesCompleteVerify': json.dumps(verify),
-                'SetPuzzlesComplete': puzzles_str}
+        data = {
+            'SetPuzzlesCompleteVerify': json.dumps(verify),
+            'SetPuzzlesComplete': puzzles_str
+        }
 
         request = self.make_request(data)
 
         response = foldit_ops(request)
         self.assertEqual(response.status_code, 200)
-
-        response_data = json.loads(response.content)
 
         self.assertEqual(response.content,
                          json.dumps([{

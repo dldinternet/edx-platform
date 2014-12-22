@@ -5,6 +5,7 @@ import logging
 
 from mock import Mock
 from pkg_resources import resource_string
+from opaque_keys.edx.locations import Location
 from xmodule.editing_module import TabsEditingDescriptor
 from xblock.field_data import DictFieldData
 from xblock.fields import ScopeIds
@@ -27,10 +28,18 @@ class TabsEditingDescriptorTestCase(unittest.TestCase):
                 'template': "tabs/codemirror-edit.html",
                 'current': True,
                 'css': {
-                    'scss': [resource_string(__name__,
-                    '../../test_files/test_tabseditingdescriptor.scss')],
-                    'css': [resource_string(__name__,
-                    '../../test_files/test_tabseditingdescriptor.css')]
+                    'scss': [
+                        resource_string(
+                            __name__,
+                            '../../test_files/test_tabseditingdescriptor.scss'
+                        )
+                    ],
+                    'css': [
+                        resource_string(
+                            __name__,
+                            '../../test_files/test_tabseditingdescriptor.css'
+                        )
+                    ]
                 }
             },
             {
@@ -46,7 +55,7 @@ class TabsEditingDescriptorTestCase(unittest.TestCase):
         TabsEditingDescriptor.tabs = self.tabs
         self.descriptor = system.construct_xblock_from_class(
             TabsEditingDescriptor,
-            scope_ids=ScopeIds(None, None, None, None),
+            scope_ids=ScopeIds(None, None, None, Location('org', 'course', 'run', 'category', 'name', 'revision')),
             field_data=DictFieldData({}),
         )
 
@@ -64,4 +73,3 @@ class TabsEditingDescriptorTestCase(unittest.TestCase):
         """"test get_context"""
         rendered_context = self.descriptor.get_context()
         self.assertListEqual(rendered_context['tabs'], self.tabs)
-

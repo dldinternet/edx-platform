@@ -4,13 +4,12 @@ Tests for wiki permissions
 
 from django.contrib.auth.models import Group
 from student.tests.factories import UserFactory
-from xmodule.modulestore.django import loc_mapper
 from xmodule.modulestore.tests.factories import CourseFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 
 from django.test.utils import override_settings
 from courseware.tests.factories import InstructorFactory, StaffFactory
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 
 from wiki.models import URLPath
 from course_wiki.views import get_or_create_root
@@ -18,7 +17,7 @@ from course_wiki.utils import user_is_article_course_staff, course_wiki_slug
 from course_wiki import settings
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestWikiAccessBase(ModuleStoreTestCase):
     """Base class for testing wiki access."""
     def setUp(self):
@@ -48,16 +47,12 @@ class TestWikiAccessBase(ModuleStoreTestCase):
     def create_staff_for_course(self, course):
         """Creates and returns users with instructor and staff access to course."""
 
-        course_locator = loc_mapper().translate_location(course.id, course.location)
         return [
-            InstructorFactory(course=course.location),  # Creates instructor_org/number/run role name
-            StaffFactory(course=course.location),  # Creates staff_org/number/run role name
-            InstructorFactory(course=course_locator),  # Creates instructor_org.number.run role name
-            StaffFactory(course=course_locator),  # Creates staff_org.number.run role name
+            InstructorFactory(course_key=course.id),  # Creates instructor_org/number/run role name
+            StaffFactory(course_key=course.id),  # Creates staff_org/number/run role name
         ]
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
 class TestWikiAccess(TestWikiAccessBase):
     """Test wiki access for course staff."""
     def setUp(self):
@@ -118,7 +113,6 @@ class TestWikiAccess(TestWikiAccessBase):
             self.assertFalse(user_is_article_course_staff(course_staff, self.wiki_310b.article))
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
 class TestWikiAccessForStudent(TestWikiAccessBase):
     """Test access for students."""
     def setUp(self):
@@ -134,7 +128,6 @@ class TestWikiAccessForStudent(TestWikiAccessBase):
             self.assertFalse(user_is_article_course_staff(self.student, page.article))
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
 class TestWikiAccessForNumericalCourseNumber(TestWikiAccessBase):
     """Test staff has access if course number is numerical and wiki slug has an underscore appended."""
     def setUp(self):
@@ -148,13 +141,12 @@ class TestWikiAccessForNumericalCourseNumber(TestWikiAccessBase):
         wiki_200_page_page = self.create_urlpath(wiki_200_page, 'Grandchild')
         self.wiki_200_pages = [wiki_200, wiki_200_page, wiki_200_page_page]
 
-    def test_course_staff_is_course_wiki_staff_for_numerical_course_number(self):  # pylint: disable=C0103
+    def test_course_staff_is_course_wiki_staff_for_numerical_course_number(self):  # pylint: disable=invalid-name
         for page in self.wiki_200_pages:
             for course_staff in self.course_200_staff:
                 self.assertTrue(user_is_article_course_staff(course_staff, page.article))
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
 class TestWikiAccessForOldFormatCourseStaffGroups(TestWikiAccessBase):
     """Test staff has access if course group has old format."""
     def setUp(self):

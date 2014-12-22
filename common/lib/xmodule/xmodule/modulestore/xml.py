@@ -13,23 +13,26 @@ from fs.osfs import OSFS
 from importlib import import_module
 from lxml import etree
 from path import path
+from contextlib import contextmanager
 
 from xmodule.error_module import ErrorDescriptor
 from xmodule.errortracker import make_error_tracker, exc_info_to_str
-from xmodule.course_module import CourseDescriptor
 from xmodule.mako_module import MakoDescriptorSystem
-from xmodule.x_module import XMLParsingSystem, policy_key
+from xmodule.x_module import XMLParsingSystem, policy_key, OpaqueKeyReader, AsideKeyGenerator
 from xmodule.modulestore.xml_exporter import DEFAULT_CONTENT_FIELDS
+from xmodule.modulestore import ModuleStoreEnum, ModuleStoreReadBase
 from xmodule.tabs import CourseTabList
+from opaque_keys.edx.locations import SlashSeparatedCourseKey, Location
+from opaque_keys.edx.locator import CourseLocator
 
-from xblock.fields import ScopeIds
 from xblock.field_data import DictFieldData
-from xblock.runtime import DictKeyValueStore, IdReader, IdGenerator
+from xblock.runtime import DictKeyValueStore
 
-from . import ModuleStoreReadBase, Location, XML_MODULESTORE_TYPE
 
 from .exceptions import ItemNotFoundError
 from .inheritance import compute_inherited_metadata, inheriting_field_data
+
+from xblock.fields import ScopeIds
 
 edx_xml_parser = etree.XMLParser(dtd_validation=False, load_dtd=False,
                                  remove_comments=True, remove_blank_text=True)
@@ -51,7 +54,7 @@ def clean_out_mako_templating(xml_string):
 class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
     def __init__(self, xmlstore, course_id, course_dir,
                  error_tracker, parent_tracker,
-                 load_error_modules=True, id_reader=None, **kwargs):
+                 load_error_modules=True, **kwargs):
         """
         A class that handles loading from xml.  Does some munging to ensure that
         all elements have unique slugs.
@@ -60,17 +63,11 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
         """
         self.unnamed = defaultdict(int)  # category -> num of new url_names for that category
         self.used_names = defaultdict(set)  # category -> set of used url_names
-        course_id_dict = Location.parse_course_id(course_id)
-        self.org = course_id_dict['org']
-        self.course = course_id_dict['course']
-        self.url_name = course_id_dict['name']
-        if id_reader is None:
-            id_reader = LocationReader()
-        id_generator = CourseLocationGenerator(self.org, self.course)
 
         # cdodge: adding the course_id as passed in for later reference rather than having to recomine the org/course/url_name
         self.course_id = course_id
         self.load_error_modules = load_error_modules
+        self.modulestore = xmlstore
 
         def process_xml(xml):
             """Takes an xml string, and returns a XBlock created from
@@ -131,9 +128,9 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
                     # put it in the error tracker--content folks need to see it.
 
                     if tag in need_uniq_names:
-                        error_tracker("PROBLEM: no name of any kind specified for {tag}.  Student "
-                                      "state will not be properly tracked for this module.  Problem xml:"
-                                      " '{xml}...'".format(tag=tag, xml=xml[:100]))
+                        error_tracker(u"PROBLEM: no name of any kind specified for {tag}.  Student "
+                                      u"state will not be properly tracked for this module.  Problem xml:"
+                                      u" '{xml}...'".format(tag=tag, xml=xml[:100]))
                     else:
                         # TODO (vshnayder): We may want to enable this once course repos are cleaned up.
                         # (or we may want to give up on the requirement for non-state-relevant issues...)
@@ -146,8 +143,8 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
                     # doesn't store state, don't complain about things that are
                     # hashed.
                     if tag in need_uniq_names:
-                        msg = ("Non-unique url_name in xml.  This may break state tracking for content."
-                               "  url_name={0}.  Content={1}".format(url_name, xml[:100]))
+                        msg = (u"Non-unique url_name in xml.  This may break state tracking for content."
+                               u"  url_name={0}.  Content={1}".format(url_name, xml[:100]))
                         error_tracker("PROBLEM: " + msg)
                         log.warning(msg)
                         # Just set name to fallback_name--if there are multiple things with the same fallback name,
@@ -173,12 +170,12 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
 
                 make_name_unique(xml_data)
 
-                descriptor = create_block_from_xml(
-                    etree.tostring(xml_data, encoding='unicode'),
-                    self,
-                    id_generator,
+                descriptor = self.xblock_from_node(
+                    xml_data,
+                    None,  # parent_id
+                    id_manager,
                 )
-            except Exception as err:
+            except Exception as err:  # pylint: disable=broad-except
                 if not self.load_error_modules:
                     raise
 
@@ -202,7 +199,7 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
                 descriptor = ErrorDescriptor.from_xml(
                     xml,
                     self,
-                    id_generator,
+                    id_manager,
                     err_msg
                 )
 
@@ -224,11 +221,13 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
         # TODO (vshnayder): we are somewhat architecturally confused in the loading code:
         # load_item should actually be get_instance, because it expects the course-specific
         # policy to be loaded.  For now, just add the course_id here...
-        def load_item(location):
+        def load_item(usage_key):
             """Return the XBlock for the specified location"""
-            return xmlstore.get_instance(course_id, Location(location))
+            return xmlstore.get_item(usage_key)
 
         resources_fs = OSFS(xmlstore.data_dir / course_dir)
+
+        id_manager = CourseLocationManager(course_id)
 
         super(ImportSystem, self).__init__(
             load_item=load_item,
@@ -236,7 +235,8 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
             render_template=render_template,
             error_tracker=error_tracker,
             process_xml=process_xml,
-            id_reader=id_reader,
+            id_generator=id_manager,
+            id_reader=id_manager,
             **kwargs
         )
 
@@ -247,69 +247,35 @@ class ImportSystem(XMLParsingSystem, MakoDescriptorSystem):
         block.children.append(child_block.scope_ids.usage_id)
 
 
-class LocationReader(IdReader):
-    """
-    IdReader for definition and usage ids that are Locations
-    """
-    def get_definition_id(self, usage_id):
-        return usage_id
-
-    def get_block_type(self, def_id):
-        location = def_id
-        return location.category
-
-
-class CourseLocationGenerator(IdGenerator):
+class CourseLocationManager(OpaqueKeyReader, AsideKeyGenerator):
     """
     IdGenerator for Location-based definition ids and usage ids
     based within a course
     """
-    def __init__(self, org, course):
-        self.org = org
-        self.course = course
+    def __init__(self, course_id):
+        super(CourseLocationManager, self).__init__()
+        self.course_id = course_id
         self.autogen_ids = itertools.count(0)
 
     def create_usage(self, def_id):
-        return Location(def_id)
+        return def_id
 
     def create_definition(self, block_type, slug=None):
         assert block_type is not None
         if slug is None:
             slug = 'autogen_{}_{}'.format(block_type, self.autogen_ids.next())
-        location = Location('i4x', self.org, self.course, block_type, slug)
-        return location
+        return self.course_id.make_usage_key(block_type, slug)
 
+    def get_definition_id(self, usage_id):
+        """Retrieve the definition that a usage is derived from.
 
-def create_block_from_xml(xml_data, system, id_generator):
-    """
-    Create an XBlock instance from XML data.
+        Args:
+            usage_id: The id of the usage to query
 
-    Args:
-        xml_data (string): A string containing valid xml.
-        system (XMLParsingSystem): The :class:`.XMLParsingSystem` used to connect the block
-            to the outside world.
-        id_generator (IdGenerator): An :class:`~xblock.runtime.IdGenerator` that
-            will be used to construct the usage_id and definition_id for the block.
-
-    Returns:
-        XBlock: The fully instantiated :class:`~xblock.core.XBlock`.
-
-    """
-    node = etree.fromstring(xml_data)
-    raw_class = system.load_block_type(node.tag)
-    xblock_class = system.mixologist.mix(raw_class)
-
-    # leave next line commented out - useful for low-level debugging
-    # log.debug('[create_block_from_xml] tag=%s, class=%s' % (node.tag, xblock_class))
-
-    block_type = node.tag
-    url_name = node.get('url_name')
-    def_id = id_generator.create_definition(block_type, url_name)
-    usage_id = id_generator.create_usage(def_id)
-
-    scope_ids = ScopeIds(None, block_type, def_id, usage_id)
-    xblock = xblock_class.parse_xml(node, system, scope_ids, id_generator)
-    return xblock
+        Returns:
+            The `definition_id` the usage is derived from
+        """
+        return usage_id
 
 
 class ParentTracker(object):
@@ -318,7 +284,7 @@ class ParentTracker(object):
         """
         Init
         """
-        # location -> set(parents).  Not using defaultdict because we care about the empty case.
+        # location -> parent.  Not using defaultdict because we care about the empty case.
         self._parents = dict()
 
     def add_parent(self, child, parent):
@@ -327,8 +293,7 @@ class ParentTracker(object):
 
         child and parent must be :class:`.Location` instances.
         """
-        s = self._parents.setdefault(child, set())
-        s.add(parent)
+        self._parents[child] = parent
 
     def is_known(self, child):
         """
@@ -339,13 +304,13 @@ class ParentTracker(object):
     def make_known(self, location):
         """Tell the parent tracker about an object, without registering any
         parents for it.  Used for the top level course descriptor locations."""
-        self._parents.setdefault(location, set())
+        self._parents.setdefault(location, None)
 
-    def parents(self, child):
+    def parent(self, child):
         """
-        Return a list of the parents of this child.  If not is_known(child), will throw a KeyError
+        Return the parent of this child.  If not is_known(child), will throw a KeyError
         """
-        return list(self._parents[child])
+        return self._parents[child]
 
 
 class XMLModuleStore(ModuleStoreReadBase):
@@ -354,18 +319,19 @@ class XMLModuleStore(ModuleStoreReadBase):
     """
     def __init__(
         self, data_dir, default_class=None, course_dirs=None, course_ids=None,
-        load_error_modules=True, i18n_service=None, **kwargs
+        load_error_modules=True, i18n_service=None, fs_service=None, **kwargs
     ):
         """
         Initialize an XMLModuleStore from data_dir
 
-        data_dir: path to data directory containing the course directories
+        Args:
+            data_dir (str): path to data directory containing the course directories
 
-        default_class: dot-separated string defining the default descriptor
-            class to use if none is specified in entry_points
+            default_class (str): dot-separated string defining the default descriptor
+                class to use if none is specified in entry_points
 
-        course_dirs or course_ids: If specified, the list of course_dirs or course_ids to load. Otherwise,
-            load all courses. Note, providing both
+            course_dirs or course_ids (list of str): If specified, the list of course_dirs or course_ids to load. Otherwise,
+                load all courses. Note, providing both
         """
         super(XMLModuleStore, self).__init__(**kwargs)
 
@@ -373,6 +339,9 @@ class XMLModuleStore(ModuleStoreReadBase):
         self.modules = defaultdict(dict)  # course_id -> dict(location -> XBlock)
         self.courses = {}  # course_dir -> XBlock for the course
         self.errored_courses = {}  # course_dir -> errorlog, for dirs that failed to load
+
+        if course_ids is not None:
+            course_ids = [SlashSeparatedCourseKey.from_deprecated_string(course_id) for course_id in course_ids]
 
         self.load_error_modules = load_error_modules
 
@@ -384,12 +353,12 @@ class XMLModuleStore(ModuleStoreReadBase):
             self.default_class = class_
 
         self.parent_trackers = defaultdict(ParentTracker)
-        self.reference_type = Location
 
         # All field data will be stored in an inheriting field data.
         self.field_data = inheriting_field_data(kvs=DictKeyValueStore())
 
         self.i18n_service = i18n_service
+        self.fs_service = fs_service
 
         # If we are specifically asked for missing courses, that should
         # be an error.  If we are asked for "all" courses, find the ones
@@ -415,9 +384,9 @@ class XMLModuleStore(ModuleStoreReadBase):
         course_descriptor = None
         try:
             course_descriptor = self.load_course(course_dir, course_ids, errorlog.tracker)
-        except Exception as e:
+        except Exception as exc:  # pylint: disable=broad-except
             msg = "ERROR: Failed to load course '{0}': {1}".format(
-                course_dir.encode("utf-8"), unicode(e)
+                course_dir.encode("utf-8"), unicode(exc)
             )
             log.exception(msg)
             errorlog.tracker(msg)
@@ -430,7 +399,7 @@ class XMLModuleStore(ModuleStoreReadBase):
             self.errored_courses[course_dir] = errorlog
         else:
             self.courses[course_dir] = course_descriptor
-            self._location_errors[course_descriptor.scope_ids.usage_id] = errorlog
+            self._course_errors[course_descriptor.id] = errorlog
             self.parent_trackers[course_descriptor.id].make_known(course_descriptor.scope_ids.usage_id)
 
     def __unicode__(self):
@@ -521,7 +490,7 @@ class XMLModuleStore(ModuleStoreReadBase):
                     raise ValueError("Can't load a course without a 'url_name' "
                                      "(or 'name') set.  Set url_name.")
 
-            course_id = CourseDescriptor.make_id(org, course, url_name)
+            course_id = SlashSeparatedCourseKey(org, course, url_name)
             if course_ids is not None and course_id not in course_ids:
                 return None
 
@@ -534,6 +503,9 @@ class XMLModuleStore(ModuleStoreReadBase):
             services = {}
             if self.i18n_service:
                 services['i18n'] = self.i18n_service
+
+            if self.fs_service:
+                services['fs'] = self.fs_service
 
             system = ImportSystem(
                 xmlstore=self,
@@ -670,42 +642,20 @@ class XMLModuleStore(ModuleStoreReadBase):
                         module.save()
 
                         self.modules[course_descriptor.id][module.scope_ids.usage_id] = module
-                except Exception, e:
+                except Exception as exc:  # pylint: disable=broad-except
                     logging.exception("Failed to load %s. Skipping... \
-                            Exception: %s", filepath, unicode(e))
-                    system.error_tracker("ERROR: " + unicode(e))
+                            Exception: %s", filepath, unicode(exc))
+                    system.error_tracker("ERROR: " + unicode(exc))
 
-    def get_instance(self, course_id, location, depth=0):
-        """
-        Returns an XBlock instance for the item at
-        location, with the policy for course_id.  (In case two xml
-        dirs have different content at the same location, return the
-        one for this course_id.)
-
-        If any segment of the location is None except revision, raises
-            xmodule.modulestore.exceptions.InsufficientSpecificationError
-
-        If no object is found at that location, raises
-            xmodule.modulestore.exceptions.ItemNotFoundError
-
-        location: Something that can be passed to Location
-        """
-        location = Location(location)
-        try:
-            return self.modules[course_id][location]
-        except KeyError:
-            raise ItemNotFoundError(location)
-
-    def has_item(self, course_id, location):
+    def has_item(self, usage_key):
         """
         Returns True if location exists in this ModuleStore.
         """
-        location = Location(location)
-        return location in self.modules[course_id]
+        return usage_key in self.modules[usage_key.course_key]
 
-    def get_item(self, location, depth=0):
+    def get_item(self, usage_key, depth=0, **kwargs):
         """
-        Returns an XBlock instance for the item at location.
+        Returns an XBlock instance for the item for this UsageKey.
 
         If any segment of the location is None except revision, raises
             xmodule.modulestore.exceptions.InsufficientSpecificationError
@@ -713,30 +663,73 @@ class XMLModuleStore(ModuleStoreReadBase):
         If no object is found at that location, raises
             xmodule.modulestore.exceptions.ItemNotFoundError
 
-        location: Something that can be passed to Location
+        usage_key: a UsageKey that matches the module we are looking for.
         """
-        raise NotImplementedError("XMLModuleStores can't guarantee that definitions"
-                                  " are unique. Use get_instance.")
+        try:
+            return self.modules[usage_key.course_key][usage_key]
+        except KeyError:
+            raise ItemNotFoundError(usage_key)
 
-    def get_items(self, location, course_id=None, depth=0, qualifiers=None):
+    def get_items(self, course_id, settings=None, content=None, revision=None, qualifiers=None, **kwargs):
+        """
+        Returns:
+            list of XModuleDescriptor instances for the matching items within the course with
+            the given course_id
+
+        NOTE: don't use this to look for courses
+        as the course_id is required. Use get_courses.
+
+        Args:
+            course_id (CourseKey): the course identifier
+            settings (dict): fields to look for which have settings scope. Follows same syntax
+                and rules as qualifiers below
+            content (dict): fields to look for which have content scope. Follows same syntax and
+                rules as qualifiers below.
+            qualifiers (dict): what to look for within the course.
+                Common qualifiers are ``category`` or any field name. if the target field is a list,
+                then it searches for the given value in the list not list equivalence.
+                Substring matching pass a regex object.
+                For this modulestore, ``name`` is another commonly provided key (Location based stores)
+                (but not revision!)
+                For this modulestore,
+                you can search dates by providing either a datetime for == (probably
+                useless) or a tuple (">"|"<" datetime) for after or before, etc.
+        """
+        if revision == ModuleStoreEnum.RevisionOption.draft_only:
+            return []
+
         items = []
 
-        def _add_get_items(self, location, modules):
-            for mod_loc, module in modules.iteritems():
-                # Locations match if each value in `location` is None or if the value from `location`
-                # matches the value from `mod_loc`
-                if all(goal is None or goal == value for goal, value in zip(location, mod_loc)):
-                    items.append(module)
+        qualifiers = qualifiers.copy() if qualifiers else {}  # copy the qualifiers (destructively manipulated here)
+        category = qualifiers.pop('category', None)
+        name = qualifiers.pop('name', None)
 
-        if course_id is None:
-            for _, modules in self.modules.iteritems():
-                _add_get_items(self, location, modules)
-        else:
-            _add_get_items(self, location, self.modules[course_id])
+        def _block_matches_all(mod_loc, module):
+            if category and mod_loc.category != category:
+                return False
+            if name and mod_loc.name != name:
+                return False
+            return all(
+                self._block_matches(module, fields or {})
+                for fields in [settings, content, qualifiers]
+            )
+
+        for mod_loc, module in self.modules[course_id].iteritems():
+            if _block_matches_all(mod_loc, module):
+                items.append(module)
 
         return items
 
-    def get_courses(self, depth=0):
+    def make_course_key(self, org, course, run):
+        """
+        Return a valid :class:`~opaque_keys.edx.keys.CourseKey` for this modulestore
+        that matches the supplied `org`, `course`, and `run`.
+
+        This key may represent a course that doesn't exist in this modulestore.
+        """
+        return CourseLocator(org, course, run, deprecated=True)
+
+    def get_courses(self, depth=0, **kwargs):
         """
         Returns a list of course descriptors.  If there were errors on loading,
         some of these may be ErrorDescriptors instead.
@@ -750,7 +743,7 @@ class XMLModuleStore(ModuleStoreReadBase):
         """
         return dict((k, self.errored_courses[k].errors) for k in self.errored_courses)
 
-    def get_orphans(self, course_location, _branch):
+    def get_orphans(self, course_key, **kwargs):
         """
         Get all of the xblocks in the given course which have no parents and are not of types which are
         usually orphaned. NOTE: may include xblocks which still have references via xblocks which don't
@@ -759,44 +752,70 @@ class XMLModuleStore(ModuleStoreReadBase):
         # here just to quell the abstractmethod. someone could write the impl if needed
         raise NotImplementedError
 
-    def update_item(self, xblock, user, **kwargs):
-        """
-        Set the data in the item specified by the location to
-        data
-
-        location: Something that can be passed to Location
-        data: A nested dictionary of problem data
-        """
-        raise NotImplementedError("XMLModuleStores are read-only")
-
-    def get_parent_locations(self, location, course_id):
-        '''Find all locations that are the parents of this location in this
+    def get_parent_location(self, location, **kwargs):
+        '''Find the location that is the parent of this location in this
         course.  Needed for path_to_location().
-
-        returns an iterable of things that can be passed to Location.  This may
-        be empty if there are no parents.
         '''
-        location = Location.ensure_fully_specified(location)
-        if not self.parent_trackers[course_id].is_known(location):
-            raise ItemNotFoundError("{0} not in {1}".format(location, course_id))
+        if not self.parent_trackers[location.course_key].is_known(location):
+            raise ItemNotFoundError("{0} not in {1}".format(location, location.course_key))
 
-        return self.parent_trackers[course_id].parents(location)
+        return self.parent_trackers[location.course_key].parent(location)
 
-    def get_modulestore_type(self, course_id):
+    def get_modulestore_type(self, course_key=None):
         """
-        Returns an enumeration-like type reflecting the type of this modulestore
-        The return can be one of:
-        "xml" (for XML based courses),
-        "mongo" for old-style MongoDB backed courses,
-        "split" for new-style split MongoDB backed courses.
+        Returns an enumeration-like type reflecting the type of this modulestore, per ModuleStoreEnum.Type
+        Args:
+            course_key: just for signature compatibility
         """
-        return XML_MODULESTORE_TYPE
+        return ModuleStoreEnum.Type.xml
 
-    def get_courses_for_wiki(self, wiki_slug):
+    def get_courses_for_wiki(self, wiki_slug, **kwargs):
         """
         Return the list of courses which use this wiki_slug
         :param wiki_slug: the course wiki root slug
         :return: list of course locations
         """
         courses = self.get_courses()
-        return [course.location for course in courses if (course.wiki_slug == wiki_slug)]
+        return [course.location.course_key for course in courses if (course.wiki_slug == wiki_slug)]
+
+    def heartbeat(self):
+        """
+        Ensure that every known course is loaded and ready to go. Really, just return b/c
+        if this gets called the __init__ finished which means the courses are loaded.
+
+        Returns the course count
+        """
+        return {ModuleStoreEnum.Type.xml: True}
+
+    @contextmanager
+    def branch_setting(self, branch_setting, course_id=None):  # pylint: disable=unused-argument
+        """
+        A context manager for temporarily setting the branch value for the store to the given branch_setting.
+        """
+        if branch_setting != ModuleStoreEnum.Branch.published_only:
+            raise ValueError(u"Cannot set branch setting to {} on a ReadOnly store".format(branch_setting))
+        yield
+
+    def _find_course_asset(self, asset_key):
+        """
+        For now this is not implemented, but others should feel free to implement using the asset.json
+        which export produces.
+        """
+        log.warning("_find_course_asset request of XML modulestore - not implemented.")
+        return (None, None)
+
+    def find_asset_metadata(self, asset_key, **kwargs):
+        """
+        For now this is not implemented, but others should feel free to implement using the asset.json
+        which export produces.
+        """
+        log.warning("find_asset_metadata request of XML modulestore - not implemented.")
+        return None
+
+    def get_all_asset_metadata(self, course_key, asset_type, start=0, maxresults=-1, sort=None, **kwargs):
+        """
+        For now this is not implemented, but others should feel free to implement using the asset.json
+        which export produces.
+        """
+        log.warning("get_all_asset_metadata request of XML modulestore - not implemented.")
+        return []

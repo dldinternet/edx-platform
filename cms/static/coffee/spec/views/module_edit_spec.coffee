@@ -19,7 +19,7 @@ define ["jquery", "js/spec_helpers/edit_helpers", "coffee/src/views/module_edit"
             <a href="#" class="edit-button"><span class="edit-icon white"></span>Edit</a>
             <a href="#" class="delete-button"><span class="delete-icon white"></span>Delete</a>
           </div>
-          <span class="drag-handle"></span>
+          <span class="drag-handle action"></span>
           <section class="xblock xblock-student_view xmodule_display xmodule_stub" data-type="StubModule">
             <div id="stub-module-content"/>
           </section>
@@ -87,6 +87,7 @@ define ["jquery", "js/spec_helpers/edit_helpers", "coffee/src/views/module_edit"
             expect($.ajax).toHaveBeenCalledWith(
               url: "/xblock/#{@moduleEdit.model.id}/student_view"
               type: "GET"
+              cache: false
               headers:
                 Accept: 'application/json'
               success: jasmine.any(Function)
@@ -107,6 +108,7 @@ define ["jquery", "js/spec_helpers/edit_helpers", "coffee/src/views/module_edit"
             expect($.ajax).not.toHaveBeenCalledWith(
               url: "/xblock/#{@moduleEdit.model.id}/studio_view"
               type: "GET"
+              cache : false
               headers:
                 Accept: 'application/json'
               success: jasmine.any(Function)
@@ -131,6 +133,7 @@ define ["jquery", "js/spec_helpers/edit_helpers", "coffee/src/views/module_edit"
             expect($.ajax).toHaveBeenCalledWith(
               url: "/xblock/#{@moduleEdit.model.id}/studio_view"
               type: "GET"
+              cache: false
               headers:
                 Accept: 'application/json'
               success: jasmine.any(Function)

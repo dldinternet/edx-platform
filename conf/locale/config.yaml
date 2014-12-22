@@ -2,6 +2,7 @@
 
 locales:
     - en  # English - Source Language
+    - am  # Amharic
     - ar  # Arabic
     - az  # Azerbaijani
     - bg_BG  # Bulgarian (Bulgaria)
@@ -15,8 +16,11 @@ locales:
     - da  # Danish
     - de_DE  # German (Germany)
     - el  # Greek
-    - en@lolcat  # LOLCAT English
-    - en@pirate  # Pirate English
+    - en_GB  # English (United Kingdom)
+    # Don't pull these until we figure out why pages randomly display in these locales,
+    # when the user's browser is in English and the user is not logged in.
+#    - en@lolcat  # LOLCAT English
+#    - en@pirate  # Pirate English
     - es_419  # Spanish (Latin America)
     - es_AR  # Spanish (Argentina)
     - es_EC  # Spanish (Ecuador)
@@ -28,10 +32,13 @@ locales:
     - fa  # Persian
     - fa_IR  # Persian (Iran)
     - fi_FI  # Finnish (Finland)
+    - fil  # Filipino
     - fr  # French
     - gl  # Galician
+    - gu  # Gujarati
     - he  # Hebrew
     - hi  # Hindi
+    - hr  # Croatian
     - hu  # Hungarian
     - hy_AM  # Armenian (Armenia)
     - id  # Indonesian
@@ -44,10 +51,12 @@ locales:
     - lt_LT  # Lithuanian (Lithuania)
     - ml  # Malayalam
     - mn  # Mongolian
+    - mr  # Marathi
     - ms  # Malay
     - nb  # Norwegian Bokmål
     - ne  # Nepali
     - nl_NL  # Dutch (Netherlands)
+    - or  # Oriya
     - pl  # Polish
     - pt_BR  # Portuguese (Brazil)
     - pt_PT  # Portuguese (Portugal)
@@ -56,12 +65,20 @@ locales:
     - si  # Sinhala
     - sk  # Slovak
     - sl  # Slovenian
+    - sq  # Albanian
+    - sr  # Serbian
+    - sv  # Swedish
+    - sw  # Swahili
+    - ta  # Tamil
+    - te  # Telugu
     - th  # Thai
     - tr_TR  # Turkish (Turkey)
     - uk  # Ukranian
     - ur  # Urdu
+    - uz  # Uzbek
     - vi  # Vietnamese
     - zh_CN  # Chinese (China)
+    - zh_HK  # Chinese (Hong Kong)
     - zh_TW  # Chinese (Taiwan)
 
 
@@ -69,6 +86,7 @@ locales:
 dummy_locales:
     - eo
     - fake2
+    - en@rtl
 
 # Directories we don't search for strings.
 ignore_dirs:
@@ -105,6 +123,9 @@ segment:
     mako.po:
         mako-studio.po:
             - cms/*
+    underscore.po:
+        underscore-studio.po:
+            - cms/*
 
 # How should the generate step merge files?
 generate_merge:
@@ -118,3 +139,5 @@ generate_merge:
     djangojs.po:
         - djangojs-partial.po
         - djangojs-studio.po
+        - underscore.po
+        - underscore-studio.po

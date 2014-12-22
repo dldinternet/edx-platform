@@ -2,13 +2,12 @@
 <%!
   from django.core.urlresolvers import reverse
   from courseware.courses import course_image_url, get_course_about_section
-  from courseware.access import has_access
 %>
 <%namespace name='static' file='../static_content.html'/>
 
 <%inherit file="../mktg_iframe.html" />
 
-<%block name="pagetitle">${_("About {course_id}").format(course_id=course_id)}</%block>
+<%block name="pagetitle">${_("About {course_id}").format(course_id=course_id) | h}</%block>
 
 <%block name="bodyclass">view-iframe-content view-partial-mktgregister</%block>
 

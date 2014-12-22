@@ -13,9 +13,9 @@ from path import path
 # This is a convenience for ensuring (a) that we can consistently find the files
 # and (b) that the files are the same in Jenkins as in local dev.
 os.environ['SERVICE_VARIANT'] = 'bok_choy'
-os.environ['CONFIG_ROOT'] = path(__file__).abspath().dirname()  # pylint: disable=E1120
+os.environ['CONFIG_ROOT'] = path(__file__).abspath().dirname()  # pylint: disable=no-value-for-parameter
 
-from .aws import *  # pylint: disable=W0401, W0614
+from .aws import *  # pylint: disable=wildcard-import, unused-wildcard-import
 
 ######################### Testing overrides ####################################
 
@@ -23,17 +23,24 @@ from .aws import *  # pylint: disable=W0401, W0614
 INSTALLED_APPS += ('django_extensions',)
 
 # Redirect to the test_root folder within the repo
-TEST_ROOT = CONFIG_ROOT.dirname().dirname() / "test_root"  # pylint: disable=E1120
+TEST_ROOT = CONFIG_ROOT.dirname().dirname() / "test_root"  # pylint: disable=no-value-for-parameter
 GITHUB_REPO_ROOT = (TEST_ROOT / "data").abspath()
 LOG_DIR = (TEST_ROOT / "log").abspath()
 
-# Configure Mongo modulestore to use the test folder within the repo
-for store in ["default", "direct"]:
-    MODULESTORE[store]['OPTIONS']['fs_root'] = (TEST_ROOT / "data").abspath()  # pylint: disable=E1120
+# Configure modulestore to use the test folder within the repo
+update_module_store_settings(
+    MODULESTORE,
+    module_store_options={
+        'fs_root': (TEST_ROOT / "data").abspath(),  # pylint: disable=no-value-for-parameter
+    },
+    xml_store_options={
+        'data_dir': (TEST_ROOT / "data").abspath(),
+    },
+    default_store=os.environ.get('DEFAULT_STORE', 'draft'),
+)
 
 # Enable django-pipeline and staticfiles
 STATIC_ROOT = (TEST_ROOT / "staticfiles").abspath()
-PIPELINE = True
 
 # Silence noisy logs
 import logging
@@ -55,3 +62,10 @@ YOUTUBE_PORT = 9080
 YOUTUBE['API'] = "127.0.0.1:{0}/get_youtube_api/".format(YOUTUBE_PORT)
 YOUTUBE['TEST_URL'] = "127.0.0.1:{0}/test_youtube/".format(YOUTUBE_PORT)
 YOUTUBE['TEXT_API']['url'] = "127.0.0.1:{0}/test_transcripts_youtube/".format(YOUTUBE_PORT)
+
+#####################################################################
+# Lastly, see if the developer has any local overrides.
+try:
+    from .private import *      # pylint: disable=import-error
+except ImportError:
+    pass

@@ -24,9 +24,9 @@ from unittest.case import SkipTest, TestCase
 from xblock.field_data import DictFieldData
 from xblock.fields import ScopeIds
 
-from xmodule.modulestore import Location
+from opaque_keys.edx.locations import Location
 
-from xmodule.x_module import ModuleSystem, XModule, XModuleDescriptor, DescriptorSystem
+from xmodule.x_module import ModuleSystem, XModule, XModuleDescriptor, DescriptorSystem, STUDENT_VIEW, STUDIO_VIEW
 from xmodule.annotatable_module import AnnotatableDescriptor
 from xmodule.capa_module import CapaDescriptor
 from xmodule.course_module import CourseDescriptor
@@ -190,7 +190,7 @@ class LeafDescriptorFactory(Factory):
 
     @lazy_attribute
     def location(self):
-        return Location('i4x://org/course/category/{}'.format(self.url_name))
+        return Location('org', 'course', 'run', 'category', self.url_name, None)
 
     @lazy_attribute
     def block_type(self):
@@ -262,7 +262,7 @@ class XBlockWrapperTestMixin(object):
     This is a mixin for building tests of the implementation of the XBlock
     api by wrapping XModule native functions.
 
-    You can creat an actual test case by inheriting from this class and UnitTest,
+    You can create an actual test case by inheriting from this class and UnitTest,
     and implement skip_if_invalid and check_property.
     """
 
@@ -286,6 +286,12 @@ class XBlockWrapperTestMixin(object):
         descriptor_cls, fields = cls_and_fields
         self.skip_if_invalid(descriptor_cls)
         descriptor = LeafModuleFactory(descriptor_cls=descriptor_cls, **fields)
+        mocked_course = Mock()
+        modulestore = Mock()
+        modulestore.get_course.return_value = mocked_course
+        # pylint: disable=no-member
+        descriptor.runtime.id_reader.get_definition_id = Mock(return_value='a')
+        descriptor.runtime.modulestore = modulestore
         self.check_property(descriptor)
 
     # Test that when an xmodule is generated from descriptor_cls
@@ -295,6 +301,8 @@ class XBlockWrapperTestMixin(object):
         descriptor_cls, fields = cls_and_fields
         self.skip_if_invalid(descriptor_cls)
         descriptor = ContainerModuleFactory(descriptor_cls=descriptor_cls, depth=2, **fields)
+        # pylint: disable=no-member
+        descriptor.runtime.id_reader.get_definition_id = Mock(return_value='a')
         self.check_property(descriptor)
 
     # Test that when an xmodule is generated from descriptor_cls
@@ -324,7 +332,7 @@ class TestStudentView(XBlockWrapperTestMixin, TestCase):
         """
         self.assertEqual(
             descriptor._xmodule.get_html(),
-            descriptor.render('student_view').content
+            descriptor.render(STUDENT_VIEW).content
         )
 
 
@@ -343,7 +351,9 @@ class TestStudioView(XBlockWrapperTestMixin, TestCase):
         """
         Assert that studio_view and get_html render the same.
         """
-        self.assertEqual(descriptor.get_html(), descriptor.render('studio_view').content)
+        html = descriptor.get_html()
+        rendered_content = descriptor.render(STUDIO_VIEW).content
+        self.assertEqual(html, rendered_content)
 
 
 class TestXModuleHandler(TestCase):

@@ -1,4 +1,4 @@
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 
 from lettuce import step
 from lettuce import world
@@ -36,8 +36,14 @@ def reset_between_outline_scenarios(_scenario, order, outline, reasons_to_fail):
     world.event_collection.drop()
 
 
-@step('[aA]n? "(.*)" (server|browser) event is emitted')
-def event_is_emitted(_step, event_type, event_source):
+@step(r'[aA]n? course url "(.*)" event is emitted$')
+def course_url_event_is_emitted(_step, url_regex):
+    event_type = url_regex.format(world.scenario_dict['COURSE'].id)
+    n_events_are_emitted(_step, 1, event_type, "server")
+
+
+@step(r'([aA]n?|\d+) "(.*)" (server|browser) events? is emitted$')
+def n_events_are_emitted(_step, count, event_type, event_source):
 
     # Ensure all events are written out to mongo before querying.
     world.mongo_client.fsync()
@@ -54,8 +60,15 @@ def event_is_emitted(_step, event_type, event_source):
             '$ne': 'python/splinter'
         }
     }
+
     cursor = world.event_collection.find(criteria)
-    assert_equals(cursor.count(), 1)
+
+    try:
+        number_events = int(count)
+    except ValueError:
+        number_events = 1
+
+    assert_equals(cursor.count(), number_events)
 
     event = cursor.next()
 

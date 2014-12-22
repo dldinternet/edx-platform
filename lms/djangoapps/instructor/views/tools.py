@@ -12,8 +12,9 @@ from django.utils.translation import ugettext as _
 
 from courseware.models import StudentModule
 from xmodule.fields import Date
-from xmodule.modulestore import XML_MODULESTORE_TYPE
+from xmodule.modulestore import ModuleStoreEnum
 from xmodule.modulestore.django import modulestore
+from opaque_keys.edx.keys import UsageKey
 
 from bulk_email.models import CourseAuthorization
 
@@ -58,8 +59,8 @@ def bulk_email_is_enabled_for_course(course_id):
     3. Bulk email is enabled for the course.
     """
 
-    bulk_email_enabled_globally = (settings.FEATURES['ENABLE_INSTRUCTOR_EMAIL'] == True)
-    is_studio_course = (modulestore().get_modulestore_type(course_id) != XML_MODULESTORE_TYPE)
+    bulk_email_enabled_globally = (settings.FEATURES['ENABLE_INSTRUCTOR_EMAIL'] is True)
+    is_studio_course = (modulestore().get_modulestore_type(course_id) != ModuleStoreEnum.Type.xml)
     bulk_email_enabled_for_course = CourseAuthorization.instructor_email_enabled(course_id)
 
     if bulk_email_enabled_globally and is_studio_course and bulk_email_enabled_for_course:
@@ -90,6 +91,21 @@ def get_student_from_identifier(unique_student_identifier):
     return student
 
 
+def require_student_from_identifier(unique_student_identifier):
+    """
+    Same as get_student_from_identifier() but will raise a DashboardError if
+    the student does not exist.
+    """
+    try:
+        return get_student_from_identifier(unique_student_identifier)
+    except User.DoesNotExist:
+        raise DashboardError(
+            _("Could not find student matching identifier: {student_identifier}").format(
+                student_identifier=unique_student_identifier
+            )
+        )
+
+
 def parse_datetime(datestr):
     """
     Convert user input date string into an instance of `datetime.datetime` in
@@ -111,7 +127,7 @@ def find_unit(course, url):
         """
         Find node in course tree for url.
         """
-        if node.location.url() == url:
+        if node.location.to_deprecated_string() == url:
             return node
         for child in node.get_children():
             found = find(child, url)
@@ -155,14 +171,44 @@ def title_or_url(node):
     """
     title = getattr(node, 'display_name', None)
     if not title:
-        title = node.location.url()
+        title = node.location.to_deprecated_string()
     return title
+
+
+def get_extended_due(course, unit, student):
+    """
+    Get the extended due date out of a student's state for a particular unit.
+    """
+    student_module = StudentModule.objects.get(
+        student_id=student.id,
+        course_id=course.id,
+        module_state_key=unit.location
+    )
+
+    state = json.loads(student_module.state)
+    extended = state.get('extended_due', None)
+    if extended:
+        return DATE_FIELD.from_json(extended)
 
 
 def set_due_date_extension(course, unit, student, due_date):
     """
-    Sets a due date extension.
+    Sets a due date extension. Raises DashboardError if the unit or extended
+    due date is invalid.
     """
+    if due_date:
+        # Check that the new due date is valid:
+        original_due_date = getattr(unit, 'due', None)
+
+        if not original_due_date:
+            raise DashboardError(_("Unit {0} has no due date to extend.").format(unit.location))
+        if due_date < original_due_date:
+            raise DashboardError(_("An extended due date must be later than the original due date."))
+    else:
+        # We are deleting a due date extension. Check that it exists:
+        if not get_extended_due(course, unit, student):
+            raise DashboardError(_("No due date extension is set for that student and unit."))
+
     def set_due_date(node):
         """
         Recursively set the due date on a node and all of its children.
@@ -171,15 +217,32 @@ def set_due_date_extension(course, unit, student, due_date):
             student_module = StudentModule.objects.get(
                 student_id=student.id,
                 course_id=course.id,
-                module_state_key=node.location.url()
+                module_state_key=node.location
             )
-
             state = json.loads(student_module.state)
-            state['extended_due'] = DATE_FIELD.to_json(due_date)
-            student_module.state = json.dumps(state)
-            student_module.save()
+
         except StudentModule.DoesNotExist:
-            pass
+            # Normally, a StudentModule is created as a side effect of assigning
+            # a value to a property in an XModule or XBlock which has a scope
+            # of 'Scope.user_state'.  Here, we want to alter user state but
+            # can't use the standard XModule/XBlock machinery to do so, because
+            # it fails to take into account that the state being altered might
+            # belong to a student other than the one currently logged in.  As a
+            # result, in our work around, we need to detect whether the
+            # StudentModule has been created for the given student on the given
+            # unit and create it if it is missing, so we can use it to store
+            # the extended due date.
+            student_module = StudentModule.objects.create(
+                student_id=student.id,
+                course_id=course.id,
+                module_state_key=node.location,
+                module_type=node.category
+            )
+            state = {}
+
+        state['extended_due'] = DATE_FIELD.to_json(due_date)
+        student_module.state = json.dumps(state)
+        student_module.save()
 
         for child in node.get_children():
             set_due_date(child)
@@ -196,7 +259,7 @@ def dump_module_extensions(course, unit):
     header = [_("Username"), _("Full Name"), _("Extended Due Date")]
     query = StudentModule.objects.filter(
         course_id=course.id,
-        module_state_key=unit.location.url())
+        module_state_key=unit.location)
     for module in query:
         state = json.loads(module.state)
         extended_due = state.get("extended_due")
@@ -225,23 +288,35 @@ def dump_student_extensions(course, student):
     data = []
     header = [_("Unit"), _("Extended Due Date")]
     units = get_units_with_due_date(course)
-    units = dict([(u.location.url(), u) for u in units])
+    units = dict([(u.location, u) for u in units])
     query = StudentModule.objects.filter(
         course_id=course.id,
         student_id=student.id)
     for module in query:
         state = json.loads(module.state)
-        if module.module_state_key not in units:
+        # temporary hack: module_state_key is missing the run but units are not. fix module_state_key
+        module_loc = module.module_state_key.map_into_course(module.course_id)
+        if module_loc not in units:
             continue
         extended_due = state.get("extended_due")
         if not extended_due:
             continue
         extended_due = DATE_FIELD.from_json(extended_due)
         extended_due = extended_due.strftime("%Y-%m-%d %H:%M")
-        title = title_or_url(units[module.module_state_key])
+        title = title_or_url(units[module_loc])
         data.append(dict(zip(header, (title, extended_due))))
     return {
         "header": header,
         "title": _("Due date extensions for {0} {1} ({2})").format(
             student.first_name, student.last_name, student.username),
         "data": data}
+
+
+def add_block_ids(payload):
+    """
+    rather than manually parsing block_ids from module_ids on the client, pass the block_ids explicitly in the payload
+    """
+    if 'data' in payload:
+        for ele in payload['data']:
+            if 'module_id' in ele:
+                ele['block_id'] = UsageKey.from_string(ele['module_id']).block_id

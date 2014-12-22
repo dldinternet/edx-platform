@@ -6,16 +6,14 @@
   // UI: basic layout
   .content-primary, .content-supplementary {
     @include box-sizing(border-box);
-    float: left;
   }
 
   .content-primary {
-    width: flex-grid(9,12);
-    margin-right: flex-gutter();
+    @extend .ui-col-wide;
   }
 
   .content-supplementary {
-    width: flex-grid(3,12);
+    @extend .ui-col-narrow;
   }
 
 
@@ -90,19 +88,19 @@
 
   // OLD
   .description {
+    @extend %t-copy-sub1;
     float: left;
     width: 62%;
     margin-right: 3%;
-    font-size: 14px;
 
     h2 {
-      font-weight: 700;
-      font-size: 19px;
+      @extend %t-title5;
+      @extend %t-strong;
       margin-bottom: 20px;
     }
 
     strong {
-      font-weight: 700;
+      @extend %t-strong;
     }
 
     p + p {
@@ -132,15 +130,15 @@
       text-align: center;
 
       h2 {
+        @extend %t-title4;
+        @extend %t-light;
         margin-bottom: 30px;
-        font-size: 26px;
-        font-weight: 300;
       }
 
       .error-block {
+        @extend %t-copy-sub1;
         display: none;
         margin-bottom: 15px;
-        font-size: 13px;
       }
 
       .error-block {
@@ -148,14 +146,14 @@
       }
 
       .button-export {
-        @include green-button;
+        @include green-button();
+        @extend %t-action1;
         padding: 10px 50px 11px;
-        font-size: 17px;
       }
 
       .message-status {
+        @extend %t-copy-sub2;
         margin-top: 10px;
-        font-size: 12px;
       }
 
       .progress-bar {

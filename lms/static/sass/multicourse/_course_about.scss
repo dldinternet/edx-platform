@@ -53,7 +53,7 @@
           h1 {
             color: $base-font-color;
             font-weight: normal;
-            @include inline-block;
+            display: inline-block;
             margin: 0;
             letter-spacing: 0px;
             text-align: left;
@@ -74,7 +74,7 @@
           }
 
           h2 {
-            @include inline-block;
+            display: inline-block;
             margin: 0;
 
             a {
@@ -233,14 +233,14 @@
 
   .container {
     @include clearfix;
-    
+
     .wrap-instructor-info {
       &.studio-view {
         position: relative;
         margin: ($baseline/2) 0 0 0;
         overflow: hidden;
       }
-      
+
       .instructor-info-action {
         @extend %t-copy-sub2;
         float: right;
@@ -250,14 +250,14 @@
         text-align: right;
         text-transform: uppercase;
         color: $lighter-base-font-color;
-    
+
         &:hover {
           background-color: $link-hover;
           color: $white;
         }
       }
     }
-    
+
     nav {
       border-bottom: 1px solid $border-color-2;
       @include box-sizing(border-box);
@@ -274,7 +274,7 @@
       a {
         border-bottom: 3px solid transparent;
         color: $lighter-base-font-color;
-        @include inline-block;
+        display: inline-block;
         letter-spacing: 1px;
         margin: 0 15px;
         padding: 0px 5px 15px;
@@ -295,11 +295,11 @@
   }
 
   .details {
-    float: left;
+    @include float(left);
     margin-right: flex-gutter();
     width: flex-grid(8);
     font: normal 1em/1.6em $serif;
-    
+
     h2 {
       margin-top: ($baseline*1.5);
     }
@@ -384,7 +384,7 @@
 
   .course-sidebar {
     @include box-sizing(border-box);
-    float: left;
+    @include float(left);
     width: flex-grid(4);
 
     > section {
@@ -444,7 +444,7 @@
         font-family: $sans-serif;
         font-style: italic;
         font-weight: 800;
-        @include inline-block;
+        display: inline-block;
         letter-spacing: 0px;
         margin-right: 15px;
         padding-right: 15px;
@@ -500,19 +500,19 @@
         }
 
         .share {
-          height: 44px;
-          @include inline-block;
-          margin-right: 10px;
+          display: inline-block;
+          height: 35px;
+          width: 35px;
+          margin-right: ($baseline);
+          margin-top: ($baseline/4);
+          font-size: 1.75em;
+          text-decoration: none;
+          color: $black;
           opacity: 0.5;
           @include transition(all 0.15s linear 0s);
-          width: 44px;
 
           &:hover, &:focus {
             opacity: 1.0;
-          }
-
-          img {
-            width: 100%;
           }
 
           &:last-child {
@@ -532,23 +532,13 @@
     .important-dates {
       list-style: none;
       margin: 0px;
-      padding: 0px 10px;
+      padding: 0px;
 
-      li {
+      .important-dates-item {
         @include clearfix;
         border-bottom: 1px dotted $border-color-2;
-        margin-bottom: 20px;
-        padding-bottom: 10px;
-
-        &.prerequisites {
-          border: 1px solid $border-color-2;
-          margin: 0 -10px 0;
-          padding: 10px;
-
-          p {
-            margin-right: 10px;
-          }
-        }
+        margin-bottom: $baseline;
+        padding-bottom: ($baseline/2);
 
         &:hover, &:focus {
           .icon {
@@ -556,47 +546,20 @@
           }
         }
 
-        p {
+        .important-dates-item-title {
           color: $lighter-base-font-color;
           float: left;
           font-family: $sans-serif;
         }
 
         .icon {
-          background-size: cover;
-          float: left;
-          height: 19px;
-          margin: 2px 10px 0 0;
-          opacity: 0.6;
-          @include transition(all 0.15s linear 0s);
-          width: 19px;
-
-          &.start {
-            @include background-image(url('../images/portal-icons/calendar-icon.png'));
-          }
-
-          &.end {
-            @include background-image(url('../images/portal-icons/calendar-icon.png'));
-          }
-
-          &.length {
-            @include background-image(url('../images/portal-icons/chart-icon.png'));
-          }
-
-          &.course-number {
-            @include background-image(url('../images/portal-icons/course-info-icon.png'));
-          }
-
-          &.effort {
-            @include background-image(url('../images/portal-icons/pencil-icon.png'));
-          }
-
-          &.prereq {
-            @include background-image(url('../images/portal-icons/prerec-icon.png'));
-          }
+            float: left;
+            padding: 1px;
+            margin: ($baseline/5) ($baseline/2) 0 0;
+            opacity: .6;
         }
 
-        span {
+        .important-dates-item-text {
           float: right;
           font-weight: 700;
         }

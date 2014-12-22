@@ -21,6 +21,7 @@ import mock
 import requests
 from http import StubHttpRequestHandler, StubHttpService
 
+
 class StubLtiHandler(StubHttpRequestHandler):
     """
     A handler for LTI POST and GET requests.
@@ -123,7 +124,7 @@ class StubLtiHandler(StubHttpRequestHandler):
             'Content-Type': 'application/xml',
             'X-Requested-With': 'XMLHttpRequest',
             'Authorization': self._oauth_sign(url, data)
-            }
+        }
 
         # Send request ignoring verifirecation of SSL certificate
         response = requests.post(url, data=data, headers=headers, verify=False)
@@ -256,7 +257,7 @@ class StubLtiHandler(StubHttpRequestHandler):
         sha1 = hashlib.sha1()
         sha1.update(body)
         oauth_body_hash = unicode(base64.b64encode(sha1.digest()))  # pylint: disable=too-many-function-args
-        params = client.get_oauth_params()
+        params = client.get_oauth_params(None)
         params.append((u'oauth_body_hash', oauth_body_hash))
         mock_request = mock.Mock(
             uri=unicode(urllib.unquote(url)),

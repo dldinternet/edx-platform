@@ -10,15 +10,23 @@ sessions. Assumes structure:
 
 # We intentionally define lots of variables that aren't used, and
 # want to import all variables from base settings files
-# pylint: disable=W0401, W0614
+# pylint: disable=wildcard-import, unused-wildcard-import
 
 from .common import *
 import os
 from path import path
-from warnings import filterwarnings
+from warnings import filterwarnings, simplefilter
+from uuid import uuid4
 
 # import settings from LMS for consistent behavior with CMS
-from lms.envs.test import (WIKI_ENABLED)
+# pylint: disable=unused-import
+from lms.envs.test import (WIKI_ENABLED, PLATFORM_NAME, SITE_NAME, DEFAULT_FILE_STORAGE, MEDIA_ROOT, MEDIA_URL)
+
+# mongo connection settings
+MONGO_PORT_NUM = int(os.environ.get('EDXAPP_TEST_MONGO_PORT', '27017'))
+MONGO_HOST = os.environ.get('EDXAPP_TEST_MONGO_HOST', 'localhost')
+
+THIS_UUID = uuid4().hex[:5]
 
 # Nose Test Runner
 TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
@@ -58,46 +66,35 @@ STATICFILES_DIRS += [
     if os.path.isdir(COMMON_TEST_DATA_ROOT / course_dir)
 ]
 
-DOC_STORE_CONFIG = {
-    'host': 'localhost',
-    'db': 'test_xmodule',
-    'collection': 'test_modulestore',
-}
+# Avoid having to run collectstatic before the unit test suite
+# If we don't add these settings, then Django templates that can't
+# find pipelined assets will raise a ValueError.
+# http://stackoverflow.com/questions/12816941/unit-testing-with-django-pipeline
+STATICFILES_STORAGE = 'pipeline.storage.NonPackagingPipelineStorage'
+STATIC_URL = "/static/"
+PIPELINE_ENABLED = False
 
-MODULESTORE_OPTIONS = {
-    'default_class': 'xmodule.raw_module.RawDescriptor',
-    'fs_root': TEST_ROOT / "data",
-    'render_template': 'edxmako.shortcuts.render_to_string',
-}
-
-MODULESTORE = {
-    'default': {
-        'ENGINE': 'xmodule.modulestore.draft.DraftModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
+# Update module store settings per defaults for tests
+update_module_store_settings(
+    MODULESTORE,
+    module_store_options={
+        'default_class': 'xmodule.raw_module.RawDescriptor',
+        'fs_root': TEST_ROOT / "data",
     },
-    'direct': {
-        'ENGINE': 'xmodule.modulestore.mongo.MongoModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
+    doc_store_settings={
+        'db': 'test_xmodule',
+        'host': MONGO_HOST,
+        'port': MONGO_PORT_NUM,
+        'collection': 'test_modulestore{0}'.format(THIS_UUID),
     },
-    'draft': {
-        'ENGINE': 'xmodule.modulestore.draft.DraftModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
-    },
-    'split': {
-        'ENGINE': 'xmodule.modulestore.split_mongo.SplitMongoModuleStore',
-        'DOC_STORE_CONFIG': DOC_STORE_CONFIG,
-        'OPTIONS': MODULESTORE_OPTIONS
-    }
-}
+)
 
 CONTENTSTORE = {
     'ENGINE': 'xmodule.contentstore.mongo.MongoContentStore',
     'DOC_STORE_CONFIG': {
-        'host': 'localhost',
+        'host': MONGO_HOST,
         'db': 'test_xcontent',
+        'port': MONGO_PORT_NUM,
         'collection': 'dont_trip',
     },
     # allow for additional options that can be keyed on a name, e.g. 'trashcan'
@@ -142,7 +139,7 @@ CACHES = {
 
     'mongo_metadata_inheritance': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-        'LOCATION': '/var/tmp/mongo_metadata_inheritance',
+        'LOCATION': os.path.join(tempfile.gettempdir(), 'mongo_metadata_inheritance'),
         'TIMEOUT': 300,
         'KEY_FUNCTION': 'util.memcache.safe_key',
     },
@@ -159,6 +156,11 @@ INSTALLED_APPS += ('external_auth', )
 # hide ratelimit warnings while running tests
 filterwarnings('ignore', message='No request passed to the backend, unable to rate-limit')
 
+# Ignore deprecation warnings (so we don't clutter Jenkins builds/production)
+# https://docs.python.org/2/library/warnings.html#the-warnings-filter
+# Change to "default" to see the first instance of each hit
+# or "error" to convert all into errors
+simplefilter('ignore')
 
 ################################# CELERY ######################################
 
@@ -188,13 +190,7 @@ PASSWORD_HASHERS = (
 # dummy segment-io key
 SEGMENT_IO_KEY = '***REMOVED***'
 
-# disable NPS survey in test mode
-FEATURES['STUDIO_NPS_SURVEY'] = False
-
 FEATURES['ENABLE_SERVICE_STATUS'] = True
-
-# This is to disable a test under the common directory that will not pass when run under CMS
-FEATURES['DISABLE_RESET_EMAIL_TEST'] = True
 
 # Toggles embargo on for testing
 FEATURES['EMBARGO'] = True

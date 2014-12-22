@@ -1,24 +1,36 @@
-define(["jquery", "underscore", "js/views/xblock", "js/utils/module", "gettext", "js/views/feedback_notification"],
+define(["jquery", "underscore", "js/views/xblock", "js/utils/module", "gettext", "js/views/feedback_notification",
+    "jquery.ui"], // The container view uses sortable, which is provided by jquery.ui.
     function ($, _, XBlockView, ModuleUtils, gettext, NotificationView) {
+        var studioXBlockWrapperClass = '.studio-xblock-wrapper';
+
         var ContainerView = XBlockView.extend({
+            // Store the request token of the first xblock on the page (which we know was rendered by Studio when
+            // the page was generated). Use that request token to filter out user-defined HTML in any
+            // child xblocks within the page.
+            requestToken: "",
 
             xblockReady: function () {
                 XBlockView.prototype.xblockReady.call(this);
-                var verticalContainer = this.$('.vertical-container'),
-                    alreadySortable = this.$('.ui-sortable'),
-                    newParent,
-                    oldParent,
-                    self = this;
+                var reorderableClass, reorderableContainer,
+                    newParent, oldParent, self = this;
 
-                alreadySortable.sortable("destroy");
+                this.requestToken = this.$('div.xblock').first().data('request-token');
+                reorderableClass = this.makeRequestSpecificSelector('.reorderable-container');
 
-                verticalContainer.sortable({
+                reorderableContainer = this.$(reorderableClass);
+                reorderableContainer.sortable({
                     handle: '.drag-handle',
+
+                    start: function (event, ui) {
+                        // Necessary because of an open bug in JQuery sortable.
+                        // http://bugs.jqueryui.com/ticket/4990
+                        reorderableContainer.sortable('refreshPositions');
+                    },
 
                     stop: function (event, ui) {
                         var saving, hideSaving, removeFromParent;
 
-                        if (oldParent === undefined) {
+                        if (_.isUndefined(oldParent)) {
                             // If no actual change occurred,
                             // oldParent will never have been set.
                             return;
@@ -38,12 +50,12 @@ define(["jquery", "underscore", "js/views/xblock", "js/utils/module", "gettext",
                         // avoid creating an orphan if the addition fails.
                         if (newParent) {
                             removeFromParent = oldParent;
-                            self.reorder(newParent, function () {
-                                self.reorder(removeFromParent, hideSaving);
+                            self.updateChildren(newParent, function () {
+                                self.updateChildren(removeFromParent, hideSaving);
                             });
                         } else {
                             // No new parent, only reordering within same container.
-                            self.reorder(oldParent, hideSaving);
+                            self.updateChildren(oldParent, hideSaving);
                         }
 
                         oldParent = undefined;
@@ -55,7 +67,7 @@ define(["jquery", "underscore", "js/views/xblock", "js/utils/module", "gettext",
                         // be null if the change is related to the list the element
                         // was originally in (the case of a move within the same container
                         // or the deletion from a container when moving to a new container).
-                        var parent = $(event.target).closest('.wrapper-xblock');
+                        var parent = $(event.target).closest(studioXBlockWrapperClass);
                         if (ui.sender) {
                             // Move to a new container (the addition part).
                             newParent = parent;
@@ -69,20 +81,20 @@ define(["jquery", "underscore", "js/views/xblock", "js/utils/module", "gettext",
                     placeholder: 'component-placeholder',
                     forcePlaceholderSize: true,
                     axis: 'y',
-                    items: '> .vertical-element',
-                    connectWith: ".vertical-container",
+                    items: '> .is-draggable',
+                    connectWith: reorderableClass,
                     tolerance: "pointer"
 
                 });
             },
 
-            reorder: function (targetParent, successCallback) {
-                var children, childLocators;
+            updateChildren: function (targetParent, successCallback) {
+                var children, childLocators, xblockInfo=this.model;
 
-                // Find descendants with class "wrapper-xblock" whose parent == targetParent.
+                // Find descendants with class "studio-xblock-wrapper" whose parent === targetParent.
                 // This is necessary to filter our grandchildren, great-grandchildren, etc.
-                children = targetParent.find('.wrapper-xblock').filter(function () {
-                    var parent = $(this).parent().closest('.wrapper-xblock');
+                children = targetParent.find(studioXBlockWrapperClass).filter(function () {
+                    var parent = $(this).parent().closest(studioXBlockWrapperClass);
                     return parent.data('locator') === targetParent.data('locator');
                 });
 
@@ -105,9 +117,19 @@ define(["jquery", "underscore", "js/views/xblock", "js/utils/module", "gettext",
                         if (successCallback) {
                             successCallback();
                         }
+                        // Update publish and last modified information from the server.
+                        xblockInfo.fetch();
                     }
                 });
+            },
 
+            refresh: function() {
+                var sortableInitializedClass = this.makeRequestSpecificSelector('.reorderable-container.ui-sortable');
+                this.$(sortableInitializedClass).sortable('refresh');
+            },
+
+            makeRequestSpecificSelector: function(selector) {
+                return 'div.xblock[data-request-token="' + this.requestToken + '"] > ' + selector;
             }
         });
 

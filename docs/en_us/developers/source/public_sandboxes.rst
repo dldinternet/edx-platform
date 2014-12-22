@@ -147,8 +147,8 @@ Caveats and Warnings
 
    Next, run the commands::
 
-     rake i18n:generate
-     python i18n/verify.py
+     paver i18n_generate
+     i18n_tool validate
 
    This will generate reports of broken translations in your language. This will not, however,
    catch HTML tags that are out of order (ex. ``</b> <b>`` instead of ``<b> </b>``).

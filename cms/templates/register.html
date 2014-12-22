@@ -1,5 +1,6 @@
 <%! from django.utils.translation import ugettext as _ %>
 <%inherit file="base.html" />
+<%def name="online_help_token()"><% return "register" %></%def>
 <%! from django.core.urlresolvers import reverse %>
 
 <%block name="title">${_("Sign Up")}</%block>
@@ -26,24 +27,24 @@
 
           <ol class="list-input">
             <li class="field text required" id="field-email">
-              <label for="email">${_("Email Address")}</label>
-              <input id="email" type="email" name="email" placeholder="e.g. jane.doe@gmail.com" />
+              <label for="email">${_("E-mail")}</label>
+              <input id="email" type="email" name="email" placeholder="example: username@domain.com" />
+            </li>
+
+            <li class="field text required" id="field-name">
+              <label for="name">${_("Full Name")}</label>
+              <input id="name" type="text" name="name" placeholder="example: Jane Doe" />
+            </li>
+
+            <li class="field text required" id="field-username">
+              <label for="username">${_("Public Username")}</label>
+              <input id="username" type="text" name="username" placeholder="example: JaneDoe" />
+              <span class="tip tip-stacked">${_("This will be used in public discussions with your courses and in our edX101 support forums")}</span>
             </li>
 
             <li class="field text required" id="field-password">
               <label for="password">${_("Password")}</label>
               <input id="password" type="password" name="password" />
-            </li>
-
-            <li class="field text required" id="field-username">
-              <label for="username">${_("Public Username")}</label>
-              <input id="username" type="text" name="username" placeholder="e.g. janedoe" />
-              <span class="tip tip-stacked">${_("This will be used in public discussions with your courses and in our edX101 support forums")}</span>
-            </li>
-
-            <li class="field text required" id="field-name">
-              <label for="name">${_("Full Name")}</label>
-              <input id="name" type="text" name="name" placeholder="e.g. Jane Doe" />
             </li>
 
             <li class="field-group">
@@ -76,7 +77,7 @@
       </form>
     </article>
 
-    <aside class="content-supplementary" role="complimentary">
+    <aside class="content-supplementary" role="complementary">
       <h2 class="sr">${_("Common Studio Questions")}</h2>
 
       <div class="bit">
@@ -98,35 +99,8 @@
 </div>
 </%block>
 
-<%block name="jsextra">
-  <script type="text/javascript">
-require(["jquery", "jquery.cookie"], function($) {
-  $("form :input").focus(function() {
-    $("label[for='" + this.id + "']").addClass("is-focused");
-  }).blur(function() {
-    $("label").removeClass("is-focused");
-  });
-
-  $('form#register_form').submit(function(e) {
-    e.preventDefault();
-    var submit_data = $('#register_form').serialize();
-
-    $.ajax({
-      url: '/create_account',
-      type: 'POST',
-      dataType: 'json',
-      data: submit_data,
-      headers: {'X-CSRFToken': $.cookie('csrftoken')},
-      success: function(json) {
-        location.href = "/course";
-      },
-      error: function(jqXHR, textStatus, errorThrown) {
-        json = $.parseJSON(jqXHR.responseText);
-        $('#register_error').html(json.value).stop().addClass('is-shown');
-      },
-      notifyOnError: false
+<%block name="requirejs">
+    require(["js/factories/register"], function (RegisterFactory) {
+        RegisterFactory();
     });
-  });
-});
-  </script>
 </%block>

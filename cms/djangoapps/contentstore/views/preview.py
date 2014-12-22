@@ -9,29 +9,31 @@ from django.http import Http404, HttpResponseBadRequest
 from django.contrib.auth.decorators import login_required
 from edxmako.shortcuts import render_to_string
 
-from xmodule_modifiers import replace_static_urls, wrap_xblock, wrap_fragment
+from xmodule_modifiers import replace_static_urls, wrap_xblock, wrap_fragment, request_token
+from xmodule.x_module import PREVIEW_VIEWS, STUDENT_VIEW, AUTHOR_VIEW
+from xmodule.contentstore.django import contentstore
 from xmodule.error_module import ErrorDescriptor
 from xmodule.exceptions import NotFoundError, ProcessingError
-from xmodule.modulestore.django import modulestore, loc_mapper, ModuleI18nService
-from xmodule.modulestore.locator import Locator
+from xmodule.modulestore.django import modulestore, ModuleI18nService
+from opaque_keys.edx.keys import UsageKey
 from xmodule.x_module import ModuleSystem
 from xblock.runtime import KvsFieldData
 from xblock.django.request import webob_to_django_response, django_to_webob_request
 from xblock.exceptions import NoSuchHandlerError
 from xblock.fragment import Fragment
 
-from lms.lib.xblock.field_data import LmsFieldData
-from lms.lib.xblock.runtime import quote_slashes, unquote_slashes
+from lms.djangoapps.lms_xblock.field_data import LmsFieldData
+from cms.lib.xblock.field_data import CmsFieldData
 from cms.lib.xblock.runtime import local_resource_url
 
-from util.sandboxing import can_execute_unsafe_code
+from util.sandboxing import can_execute_unsafe_code, get_python_lib_zip
 
 import static_replace
 from .session_kv_store import SessionKeyValueStore
 from .helpers import render_from_lms
-from ..utils import get_course_for_item
 
 from contentstore.views.access import get_user_role
+from cms.djangoapps.xblock_config.models import StudioConfig
 
 __all__ = ['preview_handler']
 
@@ -39,19 +41,17 @@ log = logging.getLogger(__name__)
 
 
 @login_required
-def preview_handler(request, usage_id, handler, suffix=''):
+def preview_handler(request, usage_key_string, handler, suffix=''):
     """
     Dispatch an AJAX action to an xblock
 
-    usage_id: The usage-id of the block to dispatch to, passed through `quote_slashes`
+    usage_key_string: The usage_key_string-id of the block to dispatch to, passed through `quote_slashes`
     handler: The handler to execute
     suffix: The remainder of the url to be passed to the handler
     """
-    # Note: usage_id is currently the string form of a Location, but in the
-    # future it will be the string representation of a Locator.
-    location = unquote_slashes(usage_id)
+    usage_key = UsageKey.from_string(usage_key_string)
 
-    descriptor = modulestore().get_item(location)
+    descriptor = modulestore().get_item(usage_key)
     instance = _load_preview_module(request, descriptor)
     # Let the module handle the AJAX
     req = django_to_webob_request(request)
@@ -88,7 +88,7 @@ class PreviewModuleSystem(ModuleSystem):  # pylint: disable=abstract-method
 
     def handler_url(self, block, handler_name, suffix='', query='', thirdparty=False):
         return reverse('preview_handler', kwargs={
-            'usage_id': quote_slashes(unicode(block.scope_ids.usage_id).encode('utf-8')),
+            'usage_key_string': unicode(block.scope_ids.usage_id),
             'handler': handler_name,
             'suffix': suffix,
         }) + '?' + query
@@ -96,8 +96,34 @@ class PreviewModuleSystem(ModuleSystem):  # pylint: disable=abstract-method
     def local_resource_url(self, block, uri):
         return local_resource_url(block, uri)
 
+    def applicable_aside_types(self, block):
+        """
+        Remove acid_aside and honor the config record
+        """
+        if not StudioConfig.asides_enabled(block.scope_ids.block_type):
+            return []
+        return [
+            aside_type
+            for aside_type in super(PreviewModuleSystem, self).applicable_aside_types(block)
+            if aside_type != 'acid_aside'
+        ]
 
-def _preview_module_system(request, descriptor):
+
+class StudioUserService(object):
+    """
+    Provides a Studio implementation of the XBlock user service.
+    """
+
+    def __init__(self, request):
+        super(StudioUserService, self).__init__()
+        self._request = request
+
+    @property
+    def user_id(self):
+        return self._request.user.id
+
+
+def _preview_module_system(request, descriptor, field_data):
     """
     Returns a ModuleSystem for the specified descriptor that is specialized for
     rendering module previews.
@@ -106,22 +132,26 @@ def _preview_module_system(request, descriptor):
     descriptor: An XModuleDescriptor
     """
 
-    if isinstance(descriptor.location, Locator):
-        course_location = loc_mapper().translate_locator_to_location(descriptor.location, get_course=True)
-        course_id = course_location.course_id
-    else:
-        course_id = get_course_for_item(descriptor.location).location.course_id
+    course_id = descriptor.location.course_key
     display_name_only = (descriptor.category == 'static_tab')
 
     wrappers = [
         # This wrapper wraps the module in the template specified above
-        partial(wrap_xblock, 'PreviewRuntime', display_name_only=display_name_only),
+        partial(
+            wrap_xblock,
+            'PreviewRuntime',
+            display_name_only=display_name_only,
+            usage_id_serializer=unicode,
+            request_token=request_token(request)
+        ),
 
         # This wrapper replaces urls in the output that start with /static
         # with the correct course-specific url for the static content
         partial(replace_static_urls, None, course_id=course_id),
         _studio_wrap_xblock,
     ]
+
+    descriptor.runtime._services['user'] = StudioUserService(request)  # pylint: disable=protected-access
 
     return PreviewModuleSystem(
         static_url=settings.STATIC_URL,
@@ -134,6 +164,7 @@ def _preview_module_system(request, descriptor):
         replace_urls=partial(static_replace.replace_static_urls, data_directory=None, course_id=course_id),
         user=request.user,
         can_execute_unsafe_code=(lambda: can_execute_unsafe_code(course_id)),
+        get_python_lib_zip=(lambda: get_python_lib_zip(contentstore, course_id)),
         mixins=settings.XBLOCK_MIXINS,
         course_id=course_id,
         anonymous_student_id='student',
@@ -141,29 +172,40 @@ def _preview_module_system(request, descriptor):
         # Set up functions to modify the fragment produced by student_view
         wrappers=wrappers,
         error_descriptor_class=ErrorDescriptor,
-        # get_user_role accepts a location or a CourseLocator.
-        # If descriptor.location is a CourseLocator, course_id is unused.
-        get_user_role=lambda: get_user_role(request.user, descriptor.location, course_id),
+        get_user_role=lambda: get_user_role(request.user, course_id),
         descriptor_runtime=descriptor.runtime,
         services={
             "i18n": ModuleI18nService(),
+            "field-data": field_data,
         },
     )
 
 
 def _load_preview_module(request, descriptor):
     """
-    Return a preview XModule instantiated from the supplied descriptor.
+    Return a preview XModule instantiated from the supplied descriptor. Will use mutable fields
+    if XModule supports an author_view. Otherwise, will use immutable fields and student_view.
 
     request: The active django request
     descriptor: An XModuleDescriptor
     """
     student_data = KvsFieldData(SessionKeyValueStore(request))
+    if _has_author_view(descriptor):
+        field_data = CmsFieldData(descriptor._field_data, student_data)  # pylint: disable=protected-access
+    else:
+        field_data = LmsFieldData(descriptor._field_data, student_data)  # pylint: disable=protected-access
     descriptor.bind_for_student(
-        _preview_module_system(request, descriptor),
-        LmsFieldData(descriptor._field_data, student_data),  # pylint: disable=protected-access
+        _preview_module_system(request, descriptor, field_data),
+        field_data
     )
     return descriptor
+
+
+def _is_xblock_reorderable(xblock, context):
+    """
+    Returns true if the specified xblock is in the set of reorderable xblocks.
+    """
+    return xblock.location in context['reorderable_items']
 
 
 # pylint: disable=unused-argument
@@ -171,36 +213,44 @@ def _studio_wrap_xblock(xblock, view, frag, context, display_name_only=False):
     """
     Wraps the results of rendering an XBlock view in a div which adds a header and Studio action buttons.
     """
-    # Only add the Studio wrapper when on the container page. The unit page will remain as is for now.
-    if context.get('container_view', None) and view == 'student_view':
-        locator = loc_mapper().translate_location(xblock.course_id, xblock.location, published=False)
+    # Only add the Studio wrapper when on the container page. The "Pages" page will remain as is for now.
+    if not context.get('is_pages_view', None) and view in PREVIEW_VIEWS:
+        root_xblock = context.get('root_xblock')
+        is_root = root_xblock and xblock.location == root_xblock.location
+        is_reorderable = _is_xblock_reorderable(xblock, context)
         template_context = {
             'xblock_context': context,
             'xblock': xblock,
-            'locator': locator,
             'content': frag.content,
+            'is_root': is_root,
+            'is_reorderable': is_reorderable,
         }
-        if xblock.category == 'vertical':
-            template = 'studio_vertical_wrapper.html'
-        elif xblock.location != context.get('root_xblock').location and xblock.has_children:
-            template = 'container_xblock_component.html'
-        else:
-            template = 'studio_xblock_wrapper.html'
-        html = render_to_string(template, template_context)
+        html = render_to_string('studio_xblock_wrapper.html', template_context)
         frag = wrap_fragment(frag, html)
     return frag
 
 
 def get_preview_fragment(request, descriptor, context):
     """
-    Returns the HTML returned by the XModule's student_view,
+    Returns the HTML returned by the XModule's student_view or author_view (if available),
     specified by the descriptor and idx.
     """
     module = _load_preview_module(request, descriptor)
 
+    preview_view = AUTHOR_VIEW if _has_author_view(module) else STUDENT_VIEW
+
     try:
-        fragment = module.render("student_view", context)
-    except Exception as exc:                          # pylint: disable=W0703
-        log.warning("Unable to render student_view for %r", module, exc_info=True)
+        fragment = module.render(preview_view, context)
+    except Exception as exc:                          # pylint: disable=broad-except
+        log.warning("Unable to render %s for %r", preview_view, module, exc_info=True)
         fragment = Fragment(render_to_string('html_error.html', {'message': str(exc)}))
     return fragment
+
+
+def _has_author_view(descriptor):
+    """
+    Returns True if the xmodule linked to the descriptor supports "author_view".
+
+    If False, "student_view" and LmsFieldData should be used.
+    """
+    return getattr(descriptor, 'has_author_view', False)

@@ -22,10 +22,11 @@ from xblock.core import XBlock
 from xblock.fields import String, Scope, Integer
 from xblock.test.tools import blocks_are_equivalent
 
-from xmodule.modulestore import Location
+from opaque_keys.edx.locations import Location
+from xmodule.modulestore import EdxJSONEncoder
 from xmodule.modulestore.xml import XMLModuleStore
 from xmodule.modulestore.xml_exporter import (
-    EdxJSONEncoder, convert_between_versions, get_version
+    convert_between_versions, get_version
 )
 from xmodule.tests import DATA_DIR
 from xmodule.tests.helpers import directories_equal
@@ -36,7 +37,7 @@ def strip_filenames(descriptor):
     """
     Recursively strips 'filename' from all children's definitions.
     """
-    print("strip filename from {desc}".format(desc=descriptor.location.url()))
+    print("strip filename from {desc}".format(desc=descriptor.location.to_deprecated_string()))
     if descriptor._field_data.has(descriptor, 'filename'):
         descriptor._field_data.delete(descriptor, 'filename')
 
@@ -173,11 +174,11 @@ class TestEdxJsonEncoder(unittest.TestCase):
         self.null_utc_tz = NullTZ()
 
     def test_encode_location(self):
-        loc = Location('i4x', 'org', 'course', 'category', 'name')
-        self.assertEqual(loc.url(), self.encoder.default(loc))
+        loc = Location('org', 'course', 'run', 'category', 'name', None)
+        self.assertEqual(loc.to_deprecated_string(), self.encoder.default(loc))
 
-        loc = Location('i4x', 'org', 'course', 'category', 'name', 'version')
-        self.assertEqual(loc.url(), self.encoder.default(loc))
+        loc = Location('org', 'course', 'run', 'category', 'name', 'version')
+        self.assertEqual(loc.to_deprecated_string(), self.encoder.default(loc))
 
     def test_encode_naive_datetime(self):
         self.assertEqual(
@@ -229,12 +230,55 @@ class ConvertExportFormat(unittest.TestCase):
 
         # Expand all the test archives and store their paths.
         self.data_dir = path(__file__).realpath().parent / 'data'
-        self.version0_nodrafts = self._expand_archive('Version0_nodrafts.tar.gz')
-        self.version1_nodrafts = self._expand_archive('Version1_nodrafts.tar.gz')
-        self.version0_drafts = self._expand_archive('Version0_drafts.tar.gz')
-        self.version1_drafts = self._expand_archive('Version1_drafts.tar.gz')
-        self.version1_drafts_extra_branch = self._expand_archive('Version1_drafts_extra_branch.tar.gz')
-        self.no_version = self._expand_archive('NoVersionNumber.tar.gz')
+
+        self._version0_nodrafts = None
+        self._version1_nodrafts = None
+        self._version0_drafts = None
+        self._version1_drafts = None
+        self._version1_drafts_extra_branch = None
+        self._no_version = None
+
+    @property
+    def version0_nodrafts(self):
+        "lazily expand this"
+        if self._version0_nodrafts is None:
+            self._version0_nodrafts = self._expand_archive('Version0_nodrafts.tar.gz')
+        return self._version0_nodrafts
+
+    @property
+    def version1_nodrafts(self):
+        "lazily expand this"
+        if self._version1_nodrafts is None:
+            self._version1_nodrafts = self._expand_archive('Version1_nodrafts.tar.gz')
+        return self._version1_nodrafts
+
+    @property
+    def version0_drafts(self):
+        "lazily expand this"
+        if self._version0_drafts is None:
+            self._version0_drafts = self._expand_archive('Version0_drafts.tar.gz')
+        return self._version0_drafts
+
+    @property
+    def version1_drafts(self):
+        "lazily expand this"
+        if self._version1_drafts is None:
+            self._version1_drafts = self._expand_archive('Version1_drafts.tar.gz')
+        return self._version1_drafts
+
+    @property
+    def version1_drafts_extra_branch(self):
+        "lazily expand this"
+        if self._version1_drafts_extra_branch is None:
+            self._version1_drafts_extra_branch = self._expand_archive('Version1_drafts_extra_branch.tar.gz')
+        return self._version1_drafts_extra_branch
+
+    @property
+    def no_version(self):
+        "lazily expand this"
+        if self._no_version is None:
+            self._no_version = self._expand_archive('NoVersionNumber.tar.gz')
+        return self._no_version
 
     def tearDown(self):
         """ Common cleanup. """

@@ -1,27 +1,25 @@
 /**
  * Provides helper methods for invoking Studio editors in Jasmine tests.
  */
-define(["jquery", "underscore", "js/spec_helpers/create_sinon", "js/spec_helpers/modal_helpers",
-    "js/views/modals/edit_xblock", "xmodule", "coffee/src/main", "xblock/cms.runtime.v1"],
-    function($, _, create_sinon, modal_helpers, EditXBlockModal) {
+define(["jquery", "underscore", "js/common_helpers/ajax_helpers", "js/common_helpers/template_helpers",
+        "js/spec_helpers/modal_helpers", "js/views/modals/edit_xblock", "js/collections/component_template",
+        "xmodule", "coffee/src/main", "xblock/cms.runtime.v1"],
+    function($, _, AjaxHelpers, TemplateHelpers, modal_helpers, EditXBlockModal, ComponentTemplates) {
 
-        var editorTemplate = readFixtures('metadata-editor.underscore'),
-            numberEntryTemplate = readFixtures('metadata-number-entry.underscore'),
-            stringEntryTemplate = readFixtures('metadata-string-entry.underscore'),
-            editXBlockModalTemplate = readFixtures('edit-xblock-modal.underscore'),
-            editorModeButtonTemplate = readFixtures('editor-mode-button.underscore'),
-            installMockXBlock,
-            uninstallMockXBlock,
-            installMockXModule,
-            uninstallMockXModule,
-            installEditTemplates,
-            showEditModal;
+        var installMockXBlock, uninstallMockXBlock, installMockXModule, uninstallMockXModule,
+            mockComponentTemplates, installEditTemplates, showEditModal, verifyXBlockRequest;
 
         installMockXBlock = function(mockResult) {
             window.MockXBlock = function(runtime, element) {
-                return {
+                var block = {
                     runtime: runtime
                 };
+                if (mockResult) {
+                    block.save = function() {
+                        return mockResult;
+                    };
+                }
+                return block;
             };
         };
 
@@ -41,27 +39,70 @@ define(["jquery", "underscore", "js/spec_helpers/create_sinon", "js/spec_helpers
             window.MockDescriptor = null;
         };
 
+        mockComponentTemplates = new ComponentTemplates([
+            {
+                templates: [
+                    {
+                        category: 'discussion',
+                        display_name: 'Discussion'
+                    }],
+                type: 'discussion'
+            }, {
+                "templates": [
+                    {
+                        "category": "html",
+                        "boilerplate_name": null,
+                        "display_name": "Text"
+                    }, {
+                        "category": "html",
+                        "boilerplate_name": "announcement.yaml",
+                        "display_name": "Announcement"
+                    }, {
+                        "category": "html",
+                        "boilerplate_name": "raw.yaml",
+                        "display_name": "Raw HTML"
+                    }],
+                "type": "html"
+            }],
+            {
+                parse: true
+            });
+
         installEditTemplates = function(append) {
             modal_helpers.installModalTemplates(append);
 
+            // Add templates needed by the add XBlock menu
+            TemplateHelpers.installTemplate('add-xblock-component');
+            TemplateHelpers.installTemplate('add-xblock-component-button');
+            TemplateHelpers.installTemplate('add-xblock-component-menu');
+            TemplateHelpers.installTemplate('add-xblock-component-menu-problem');
+
             // Add templates needed by the edit XBlock modal
-            appendSetFixtures($("<script>", { id: "edit-xblock-modal-tpl", type: "text/template" }).text(editXBlockModalTemplate));
-            appendSetFixtures($("<script>", { id: "editor-mode-button-tpl", type: "text/template" }).text(editorModeButtonTemplate));
+            TemplateHelpers.installTemplate('edit-xblock-modal');
+            TemplateHelpers.installTemplate('editor-mode-button');
 
             // Add templates needed by the settings editor
-            appendSetFixtures($("<script>", {id: "metadata-editor-tpl", type: "text/template"}).text(editorTemplate));
-            appendSetFixtures($("<script>", {id: "metadata-number-entry", type: "text/template"}).text(numberEntryTemplate));
-            appendSetFixtures($("<script>", {id: "metadata-string-entry", type: "text/template"}).text(stringEntryTemplate));
+            TemplateHelpers.installTemplate('metadata-editor');
+            TemplateHelpers.installTemplate('metadata-number-entry', false, 'metadata-number-entry');
+            TemplateHelpers.installTemplate('metadata-string-entry', false, 'metadata-string-entry');
         };
 
         showEditModal = function(requests, xblockElement, model, mockHtml, options) {
             var modal = new EditXBlockModal({});
             modal.edit(xblockElement, model, options);
-            create_sinon.respondWithJson(requests, {
+            AjaxHelpers.respondWithJson(requests, {
                 html: mockHtml,
                 "resources": []
             });
             return modal;
+        };
+
+        verifyXBlockRequest = function (requests, expectedJson) {
+            var request = requests[requests.length - 1],
+                actualJson = JSON.parse(request.requestBody);
+            expect(request.url).toEqual("/xblock/");
+            expect(request.method).toEqual("POST");
+            expect(actualJson).toEqual(expectedJson);
         };
 
         return $.extend(modal_helpers, {
@@ -69,7 +110,9 @@ define(["jquery", "underscore", "js/spec_helpers/create_sinon", "js/spec_helpers
             'uninstallMockXBlock': uninstallMockXBlock,
             'installMockXModule': installMockXModule,
             'uninstallMockXModule': uninstallMockXModule,
+            'mockComponentTemplates': mockComponentTemplates,
             'installEditTemplates': installEditTemplates,
-            'showEditModal': showEditModal
+            'showEditModal': showEditModal,
+            'verifyXBlockRequest': verifyXBlockRequest
         });
     });

@@ -9,6 +9,7 @@ function (Iterator) {
      * @exports video/08_video_speed_control.js
      * @constructor
      * @param {object} state The object containing the state of the video player.
+     * @return {jquery Promise}
      */
     var SpeedControl = function (state) {
         if (!(this instanceof SpeedControl)) {
@@ -197,7 +198,7 @@ function (Iterator) {
             var speed = $(event.currentTarget).parent().data('speed');
 
             this.closeMenu();
-            this.setSpeed(this.state.speedToString(speed));
+            this.state.videoCommands.execute('speed', speed);
 
             return false;
         },

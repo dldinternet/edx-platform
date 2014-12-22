@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=C0103
-# pylint: disable=W0622
-# pylint: disable=W0212
-# pylint: disable=W0613
+# pylint: disable=invalid-name
+# pylint: disable=redefined-builtin
+# pylint: disable=protected-access
+# pylint: disable=unused-argument
 
-import sys, os
+import os
 from path import path
+import sys
 
 on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
-
 
 
 sys.path.append('../../../../')
@@ -43,12 +43,19 @@ sys.path.append(root / "common/lib/capa")
 sys.path.append(root / "common/lib/chem")
 sys.path.append(root / "common/lib/sandbox-packages")
 sys.path.append(root / "common/lib/xmodule")
+sys.path.append(root / "common/lib/opaque_keys")
 sys.path.append(root / "lms/djangoapps")
 sys.path.append(root / "lms/lib")
 sys.path.append(root / "cms/djangoapps")
 sys.path.append(root / "cms/lib")
-sys.path.insert(0, os.path.abspath(os.path.normpath(os.path.dirname(__file__)
-    + '/../../../')))
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.normpath(
+            os.path.dirname(__file__) + '/../../../'
+        )
+    )
+)
 sys.path.append('.')
 
 #  django configuration  - careful here
@@ -65,7 +72,7 @@ else:
 extensions = [
     'sphinx.ext.autodoc', 'sphinx.ext.doctest', 'sphinx.ext.intersphinx',
     'sphinx.ext.todo', 'sphinx.ext.coverage', 'sphinx.ext.pngmath',
-    'sphinx.ext.mathjax', 'sphinx.ext.viewcode']
+    'sphinx.ext.mathjax', 'sphinx.ext.viewcode', 'sphinxcontrib.napoleon']
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -81,6 +88,7 @@ copyright = u'2014, edX'
 # --- Mock modules ------------------------------------------------------------
 
 # Mock all the modules that the readthedocs build can't import
+
 
 class Mock(object):
     def __init__(self, *args, **kwargs):
@@ -133,7 +141,7 @@ MOCK_MODULES = [
     'yaml',
     'webob',
     'webob.multidict',
-    ]
+]
 
 if on_rtd:
     for mod_name in MOCK_MODULES:
@@ -184,7 +192,6 @@ def strip_tags(html):
     s = MLStripper()
     s.feed(html)
     return s.get_data()
-
 
 
 def process_docstring(app, what, name, obj, options, lines):

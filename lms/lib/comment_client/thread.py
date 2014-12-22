@@ -1,7 +1,12 @@
+import logging
+
+from eventtracking import tracker
 from .utils import merge_dict, strip_blank, strip_none, extract, perform_request
 from .utils import CommentClientRequestError
 import models
 import settings
+
+log = logging.getLogger(__name__)
 
 
 class Thread(models.Model):
@@ -12,12 +17,13 @@ class Thread(models.Model):
         'created_at', 'updated_at', 'comments_count', 'unread_comments_count',
         'at_position_list', 'children', 'type', 'highlighted_title',
         'highlighted_body', 'endorsed', 'read', 'group_id', 'group_name', 'pinned',
-        'abuse_flaggers', 'resp_skip', 'resp_limit', 'resp_total'
+        'abuse_flaggers', 'resp_skip', 'resp_limit', 'resp_total', 'thread_type',
+        'endorsed_responses', 'non_endorsed_responses', 'non_endorsed_resp_total',
     ]
 
     updatable_fields = [
         'title', 'body', 'anonymous', 'anonymous_to_peers', 'course_id',
-        'closed', 'user_id', 'commentable_id', 'group_id', 'group_name', 'pinned'
+        'closed', 'user_id', 'commentable_id', 'group_id', 'group_name', 'pinned', 'thread_type'
     ]
 
     metric_tag_fields = [
@@ -25,7 +31,7 @@ class Thread(models.Model):
         'endorsed', 'read'
     ]
 
-    initializable_fields = updatable_fields
+    initializable_fields = updatable_fields + ['thread_type']
 
     base_url = "{prefix}/threads".format(prefix=settings.PREFIX)
     default_retrieve_params = {'recursive': False}
@@ -54,14 +60,43 @@ class Thread(models.Model):
             metric_action='thread.search',
             paged_results=True
         )
-        return response.get('collection', []), response.get('page', 1), response.get('num_pages', 1)
+        if query_params.get('text'):
+            search_query = query_params['text']
+            course_id = query_params['course_id']
+            group_id = query_params['group_id'] if 'group_id' in query_params else None
+            requested_page = params['page']
+            total_results = response.get('total_results')
+            corrected_text = response.get('corrected_text')
+            # Record search result metric to allow search quality analysis.
+            # course_id is already included in the context for the event tracker
+            tracker.emit(
+                'edx.forum.searched',
+                {
+                    'query': search_query,
+                    'corrected_text': corrected_text,
+                    'group_id': group_id,
+                    'page': requested_page,
+                    'total_results': total_results,
+                }
+            )
+            log.info(
+                u'forum_text_search query="{search_query}" corrected_text="{corrected_text}" course_id={course_id} group_id={group_id} page={requested_page} total_results={total_results}'.format(
+                    search_query=search_query,
+                    corrected_text=corrected_text,
+                    course_id=course_id,
+                    group_id=group_id,
+                    requested_page=requested_page,
+                    total_results=total_results
+                )
+            )
+        return response.get('collection', []), response.get('page', 1), response.get('num_pages', 1), response.get('corrected_text')
 
     @classmethod
     def url_for_threads(cls, params={}):
         if params.get('commentable_id'):
-            return "{prefix}/{commentable_id}/threads".format(prefix=settings.PREFIX, commentable_id=params['commentable_id'])
+            return u"{prefix}/{commentable_id}/threads".format(prefix=settings.PREFIX, commentable_id=params['commentable_id'])
         else:
-            return "{prefix}/threads".format(prefix=settings.PREFIX)
+            return u"{prefix}/threads".format(prefix=settings.PREFIX)
 
     @classmethod
     def url_for_search_threads(cls, params={}):
@@ -98,7 +133,7 @@ class Thread(models.Model):
             metric_action='model.retrieve',
             metric_tags=self._metric_tags
         )
-        self.update_attributes(**response)
+        self._update_from_response(response)
 
     def flagAbuse(self, user, voteable):
         if voteable.type == 'thread':
@@ -108,14 +143,14 @@ class Thread(models.Model):
         else:
             raise CommentClientRequestError("Can only flag/unflag threads or comments")
         params = {'user_id': user.id}
-        request = perform_request(
+        response = perform_request(
             'put',
             url,
             params,
             metric_action='thread.abuse.flagged',
             metric_tags=self._metric_tags
         )
-        voteable.update_attributes(request)
+        voteable._update_from_response(response)
 
     def unFlagAbuse(self, user, voteable, removeAll):
         if voteable.type == 'thread':
@@ -129,38 +164,38 @@ class Thread(models.Model):
         if removeAll:
             params['all'] = True
 
-        request = perform_request(
+        response = perform_request(
             'put',
             url,
             params,
             metric_tags=self._metric_tags,
             metric_action='thread.abuse.unflagged'
         )
-        voteable.update_attributes(request)
+        voteable._update_from_response(response)
 
     def pin(self, user, thread_id):
         url = _url_for_pin_thread(thread_id)
         params = {'user_id': user.id}
-        request = perform_request(
+        response = perform_request(
             'put',
             url,
             params,
             metric_tags=self._metric_tags,
             metric_action='thread.pin'
         )
-        self.update_attributes(request)
+        self._update_from_response(response)
 
     def un_pin(self, user, thread_id):
         url = _url_for_un_pin_thread(thread_id)
         params = {'user_id': user.id}
-        request = perform_request(
+        response = perform_request(
             'put',
             url,
             params,
             metric_tags=self._metric_tags,
             metric_action='thread.unpin'
         )
-        self.update_attributes(request)
+        self._update_from_response(response)
 
 
 def _url_for_flag_abuse_thread(thread_id):

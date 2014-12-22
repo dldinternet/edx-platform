@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 
 from lettuce import world, step, before, after
 import json
@@ -13,6 +13,7 @@ from django.conf import settings
 from cache_toolbox.core import del_cached_content
 from xmodule.contentstore.content import StaticContent
 from xmodule.contentstore.django import contentstore
+
 
 TEST_ROOT = settings.COMMON_TEST_DATA_ROOT
 LANGUAGES = settings.ALL_LANGUAGES
@@ -54,6 +55,7 @@ VIDEO_MENUS = {
 }
 
 coursenum = 'test_course'
+
 
 @before.each_scenario
 def setUp(scenario):
@@ -102,6 +104,7 @@ class RequestHandlerWithSessionId(object):
         if value in self.headers.get(name, ''):
             return True
         return False
+
 
 def get_metadata(parent_location, player_mode, data, display_name='Video'):
     kwargs = {
@@ -195,7 +198,7 @@ def add_vertical_to_course(course_num):
 
 
 def last_vertical_location(course_num):
-    return world.scenario_dict['LAST_VERTICAL'].location._replace(course=course_num)
+    return world.scenario_dict['LAST_VERTICAL'].location.replace(course=course_num)
 
 
 def upload_file(filename, location):
@@ -204,7 +207,7 @@ def upload_file(filename, location):
     mime_type = "application/json"
 
     content_location = StaticContent.compute_location(
-        location.org, location.course, filename
+        location.course_key, filename
     )
     content = StaticContent(content_location, filename, mime_type, f.read())
     contentstore().save(content)
@@ -314,7 +317,7 @@ def reload_the_page_with_video(_step):
 
 @step('youtube stub server (.*) YouTube API')
 def configure_youtube_api(_step, action):
-    action=action.strip()
+    action = action.strip()
     if action == 'proxies':
         world.youtube.config['youtube_api_blocked'] = False
     elif action == 'blocks':
@@ -436,7 +439,7 @@ def error_message_has_correct_text(_step):
 @step('I make sure captions are (.+)$')
 def set_captions_visibility_state(_step, captions_state):
     SELECTOR = '.closed .subtitles'
-    if world.is_css_not_present(SELECTOR, wait_time=30):
+    if world.is_css_not_present(SELECTOR):
         if captions_state == 'closed':
             world.css_click('.hide-subtitles')
     else:
@@ -567,7 +570,7 @@ def video_alignment(_step, transcript_visibility):
 
     set_window_dimensions(300, 600)
     real, expected = get_all_dimensions()
-    width = round(100 * real['width']/expected['width']) == wrapper_width
+    width = round(100 * real['width'] / expected['width']) == wrapper_width
 
     set_window_dimensions(600, 300)
     real, expected = get_all_dimensions()
@@ -657,7 +660,6 @@ def is_hidden_button(_step, button, state):
 def i_see_active_button(_step, button, state):
     selector = VIDEO_BUTTONS[button]
     if state == 'active':
-       assert world.css_has_class(selector, 'active')
+        assert world.css_has_class(selector, 'active')
     else:
-       assert not world.css_has_class(selector, 'active')
-
+        assert not world.css_has_class(selector, 'active')

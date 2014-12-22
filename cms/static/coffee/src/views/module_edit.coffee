@@ -7,24 +7,29 @@ define ["jquery", "underscore", "gettext", "xblock/runtime.v1",
     editorMode: 'editor-mode'
 
     events:
-      "click .component-actions .edit-button": 'clickEditButton'
-      "click .component-actions .delete-button": 'onDelete'
+      "click .edit-button": 'clickEditButton'
+      "click .delete-button": 'onDelete'
 
     initialize: ->
       @onDelete = @options.onDelete
       @render()
 
     loadDisplay: ->
-      XBlock.initializeBlock(@$el.find('.xblock-student_view'))
+      # Not all components render an inline student view, e.g. child containers which
+      # instead render a link to a separate container page.
+      xblockElement = @$el.find('.xblock-student_view')
+      if xblockElement.length > 0
+        XBlock.initializeBlock(xblockElement)
 
     createItem: (parent, payload, callback=->) ->
       payload.parent_locator = parent
       $.postJSON(
-          @model.urlRoot
+          @model.urlRoot + '/'
           payload
           (data) =>
               @model.set(id: data.locator)
               @$el.data('locator', data.locator)
+              @$el.data('courseKey', data.courseKey)
               @render()
       ).success(callback)
 
@@ -33,6 +38,7 @@ define ["jquery", "underscore", "gettext", "xblock/runtime.v1",
         $.ajax(
           url: "#{decodeURIComponent(@model.url())}/#{viewName}"
           type: 'GET'
+          cache: false
           headers:
             Accept: 'application/json'
           success: (fragment) =>

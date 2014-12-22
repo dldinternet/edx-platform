@@ -1,7 +1,7 @@
-define(["domReady", "jquery", "jquery.ui", "underscore", "gettext", "js/views/feedback_notification", "js/utils/drag_and_drop",
-    "js/utils/cancel_on_escape", "js/utils/get_date", "js/utils/module"],
-    function (domReady, $, ui, _, gettext, NotificationView, ContentDragger, CancelOnEscape,
-              DateUtils, ModuleUtils) {
+define(["domReady", "jquery", "jquery.ui", "underscore", "gettext", "js/views/feedback_notification",
+    "js/utils/cancel_on_escape", "js/utils/date_utils", "js/utils/module", "js/views/utils/view_utils"],
+    function (domReady, $, ui, _, gettext, NotificationView, CancelOnEscape,
+              DateUtils, ModuleUtils, ViewUtils) {
 
         var modalSelector = '.edit-section-publish-settings';
 
@@ -31,12 +31,15 @@ define(["domReady", "jquery", "jquery.ui", "underscore", "gettext", "js/views/fe
 
         var toggleSubmodules = function(e) {
             e.preventDefault();
-            $(this).toggleClass('expand').toggleClass('collapse');
+            $(this).toggleClass('expand collapse');
             $(this).closest('.is-collapsible, .window').toggleClass('collapsed');
         };
 
 
-        var closeModalNew = function () {
+        var closeModalNew = function (e) {
+            if (e) {
+                e.preventDefault();
+            }
             $('body').removeClass('modal-window-is-shown');
             $('.edit-section-publish-settings').removeClass('is-shown');
         };
@@ -58,7 +61,7 @@ define(["domReady", "jquery", "jquery.ui", "underscore", "gettext", "js/views/fe
         var saveSetSectionScheduleDate = function (e) {
             e.preventDefault();
 
-            var datetime = DateUtils(
+            var datetime = DateUtils.getDate(
                 $('.edit-section-publish-settings .start-date'),
                 $('.edit-section-publish-settings .start-time')
             );
@@ -219,6 +222,10 @@ define(["domReady", "jquery", "jquery.ui", "underscore", "gettext", "js/views/fe
             $('.toggle-button-sections').bind('click', toggleSections);
             $('.expand-collapse').bind('click', toggleSubmodules);
 
+            $('.dismiss-button').bind('click', ViewUtils.deleteNotificationHandler(function () {
+                $('.wrapper-alert-announcement').remove();
+            }));
+
             var $body = $('body');
             $body.on('click', '.section-published-date .edit-release-date', editSectionPublishDate);
             $body.on('click', '.edit-section-publish-settings .action-save', saveSetSectionScheduleDate);
@@ -227,27 +234,6 @@ define(["domReady", "jquery", "jquery.ui", "underscore", "gettext", "js/views/fe
             $('.new-courseware-section-button').bind('click', addNewSection);
             $('.new-subsection-item').bind('click', addNewSubsection);
 
-            // Section
-            ContentDragger.makeDraggable(
-                '.courseware-section',
-                '.section-drag-handle',
-                '.courseware-overview',
-                'article.courseware-overview'
-            );
-            // Subsection
-            ContentDragger.makeDraggable(
-                '.id-holder',
-                '.subsection-drag-handle',
-                '.subsection-list > ol',
-                '.courseware-section'
-            );
-            // Unit
-            ContentDragger.makeDraggable(
-                '.unit',
-                '.unit-drag-handle',
-                'ol.sortable-unit-list',
-                'li.courseware-subsection, article.subsection-body'
-            );
         });
 
         return {

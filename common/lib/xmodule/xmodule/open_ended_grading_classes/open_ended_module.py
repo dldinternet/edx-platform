@@ -105,7 +105,7 @@ class OpenEndedModule(openendedchild.OpenEndedChild):
             # NOTE: self.system.location is valid because the capa_module
             # __init__ adds it (easiest way to get problem location into
             # response types)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             # This is a dev_facing_error
             log.exception(
                 "Grader payload from external open ended grading server is not a json object! Object: {0}".format(
@@ -116,7 +116,7 @@ class OpenEndedModule(openendedchild.OpenEndedChild):
 
         parsed_grader_payload.update({
             'location': self.location_string,
-            'course_id': system.course_id,
+            'course_id': system.course_id.to_deprecated_string(),
             'prompt': prompt_string,
             'rubric': rubric_string,
             'initial_display': self.initial_display,
@@ -329,16 +329,16 @@ class OpenEndedModule(openendedchild.OpenEndedChild):
             self.record_latest_post_assessment(score_msg)
             self.child_state = self.POST_ASSESSMENT
         else:
-            log.error((
+            log.error(
                 "Trying to update score without existing studentmodule child_history:\n"
                 "   location: {location}\n"
                 "   score: {score}\n"
                 "   grader_ids: {grader_ids}\n"
-                "   submission_ids: {submission_ids}").format(
+                "   submission_ids: {submission_ids}".format(
                     location=self.location_string,
                     score=new_score_msg['score'],
                     grader_ids=new_score_msg['grader_ids'],
-                    submission_ids=new_score_msg['submission_ids']
+                    submission_ids=new_score_msg['submission_ids'],
                 )
             )
 

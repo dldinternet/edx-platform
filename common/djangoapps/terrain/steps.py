@@ -1,15 +1,15 @@
-# pylint: disable=C0111
-# pylint: disable=W0621
+# pylint: disable=missing-docstring
+# pylint: disable=redefined-outer-name
 
 # Disable the "wildcard import" warning so we can bring in all methods from
 # course helpers and ui helpers
-# pylint: disable=W0401
+# pylint: disable=wildcard-import
 
 # Disable the "Unused import %s from wildcard import" warning
-# pylint: disable=W0614
+# pylint: disable=unused-wildcard-import
 
 # Disable the "unused argument" warning because lettuce uses "step"
-# pylint: disable=W0613
+# pylint: disable=unused-argument
 
 # django_url is assigned late in the process of loading lettuce,
 # so we import this as a module, and then read django_url from
@@ -19,7 +19,9 @@ import lettuce.django
 from lettuce import world, step
 from .course_helpers import *
 from .ui_helpers import *
-from nose.tools import assert_equals  # pylint: disable=E0611
+from nose.tools import assert_equals  # pylint: disable=no-name-in-module
+
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
 from logging import getLogger
 logger = getLogger(__name__)
@@ -79,7 +81,11 @@ def click_the_link_with_the_text_group1(step, linktext):
 
 @step('I should see that the path is "([^"]*)"$')
 def i_should_see_that_the_path_is(step, path):
-    assert world.url_equals(path)
+    if 'COURSE' in world.scenario_dict:
+        path = path.format(world.scenario_dict['COURSE'].id)
+    assert world.url_equals(path), (
+        "path should be {!r} but is {!r}".format(path, world.browser.url)
+    )
 
 
 @step(u'the page title should be "([^"]*)"$')
@@ -110,7 +116,8 @@ def i_am_not_logged_in(step):
 
 @step('I am staff for course "([^"]*)"$')
 def i_am_staff_for_course_by_id(step, course_id):
-    world.register_by_course_id(course_id, True)
+    course_key = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+    world.register_by_course_key(course_key, True)
 
 
 @step(r'click (?:the|a) link (?:called|with the text) "([^"]*)"$')
@@ -180,6 +187,8 @@ def dialogs_are_closed(step):
 
 @step(u'visit the url "([^"]*)"')
 def visit_url(step, url):
+    if 'COURSE' in world.scenario_dict:
+        url = url.format(world.scenario_dict['COURSE'].id)
     world.browser.visit(lettuce.django.django_url(url))
 
 

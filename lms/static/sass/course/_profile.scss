@@ -40,7 +40,7 @@
 
         div#location_sub, div#language_sub {
           font-weight: bold;
-          @include inline-block();
+          display: inline-block;
 
           form {
             width: 100%;
@@ -141,7 +141,7 @@
       margin-bottom: lh();
 
       h1 {
-        float: left;
+        @include float(left);
         font-size: 1em;
         font-weight: 100;
         margin: 0;
@@ -188,7 +188,7 @@
         }
 
         h2 {
-          border-right: 1px dashed #ddd;
+          @include border-right(1px dashed #ddd);
           @include box-sizing(border-box);
           display: table-cell;
           letter-spacing: 0;
@@ -201,7 +201,7 @@
 
         .sections {
           display: table-cell;
-          padding-left: flex-gutter(9);
+          @include padding-left(flex-gutter(9));
           width: flex-grid(7, 9);
 
           > div {
@@ -235,17 +235,17 @@
 
               h3 {
                 font-size: em(14);
-                @include inline-block;
+                display: inline-block;
               }
 
               ol {
                 list-style: none;
                 margin: 0;
                 padding: 0;
-                @include inline-block;
+                display: inline-block;
 
                 li {
-                  @include inline-block;
+                  display: inline-block;
                   font-size: em(14);
                   font-weight: normal;
                   padding-right: 1em;

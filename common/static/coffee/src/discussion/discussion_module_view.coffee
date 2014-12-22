@@ -7,7 +7,6 @@ if Backbone?
       "click .new-post-btn": "toggleNewPost"
       "keydown .new-post-btn":
         (event) -> DiscussionUtil.activateOnSpace(event, @toggleNewPost)
-      "click .new-post-cancel": "hideNewPost"
       "click .discussion-paginator a": "navigateToPage"
 
     paginationTemplate: -> DiscussionUtil.getTemplate("_pagination")
@@ -36,9 +35,8 @@ if Backbone?
       @$("section.discussion").slideDown()
       @showed = true
 
-    hideNewPost: (event) ->
-      event.preventDefault()
-      @newPostForm.slideUp(300)
+    hideNewPost: =>
+     @newPostForm.slideUp(300)
 
     hideDiscussion: =>
       @$("section.discussion").slideUp()
@@ -83,40 +81,51 @@ if Backbone?
 
     renderDiscussion: ($elem, response, textStatus, discussionId) =>
       $elem.focus()
-      window.user = new DiscussionUser(response.user_info)
+      user = new DiscussionUser(response.user_info)
+      window.user = user
+      DiscussionUtil.setUser(user)
       Content.loadContentInfos(response.annotated_content_info)
       DiscussionUtil.loadRoles(response.roles)
-      allow_anonymous = response.allow_anonymous
-      allow_anonymous_to_peers = response.allow_anonymous_to_peers
-      cohorts = response.cohorts
-      # $elem.html("Hide Discussion")
+
+      @course_settings = new DiscussionCourseSettings(response.course_settings)
       @discussion = new Discussion()
       @discussion.reset(response.discussion_data, {silent: false})
 
-      #use same discussion template but different thread templated
-      #determined in the coffeescript based on whether or not there's a
-      #group id
-      
-      if response.is_cohorted and response.is_moderator
-        source = "script#_inline_discussion_cohorted"
-      else
-        source = "script#_inline_discussion"
-      
-      $discussion = $(Mustache.render $(source).html(), {'threads':response.discussion_data, 'discussionId': discussionId, 'allow_anonymous_to_peers': allow_anonymous_to_peers, 'allow_anonymous': allow_anonymous, 'cohorts':cohorts})
+      $discussion = $(Mustache.render $("script#_inline_discussion").html(), {'threads':response.discussion_data, 'discussionId': discussionId})
       if @$('section.discussion').length
         @$('section.discussion').replaceWith($discussion)
       else
         @$el.append($discussion)
+
       @newPostForm = $('.new-post-article')
-      @threadviews = @discussion.map (thread) ->
-        new DiscussionThreadInlineView el: @$("article#thread_#{thread.id}"), model: thread
+      @threadviews = @discussion.map (thread) =>
+        view = new DiscussionThreadView(
+          el: @$("article#thread_#{thread.id}"),
+          model: thread,
+          mode: "inline",
+          course_settings: @course_settings,
+          topicId: discussionId
+        )
+        thread.on "thread:thread_type_updated", ->
+          view.rerender()
+          view.expand()
+        return view
       _.each @threadviews, (dtv) -> dtv.render()
       DiscussionUtil.bulkUpdateContentInfo(window.$$annotated_content_info)
-      @newPostView = new NewPostInlineView el: @$('.new-post-article'), collection: @discussion
+      @newPostView = new NewPostView(
+        el: @newPostForm,
+        collection: @discussion,
+        course_settings: @course_settings,
+        topicId: discussionId
+      )
+      @newPostView.render()
+      @listenTo( @newPostView, 'newPost:cancel', @hideNewPost )
       @discussion.on "add", @addThread
+
       @retrieved = true
       @showed = true
       @renderPagination(response.num_pages)
+
       if @isWaitingOnNewPost
         @newPostForm.show()
 
@@ -124,7 +133,14 @@ if Backbone?
       # TODO: When doing pagination, this will need to repaginate. Perhaps just reload page 1?
       article = $("<article class='discussion-thread' id='thread_#{thread.id}'></article>")
       @$('section.discussion > .threads').prepend(article)
-      threadView = new DiscussionThreadInlineView el: article, model: thread
+
+      threadView = new DiscussionThreadView(
+        el: article,
+        model: thread,
+        mode: "inline",
+        course_settings: @course_settings,
+        topicId: @$el.data("discussion-id")
+      )
       threadView.render()
       @threadviews.unshift threadView
 

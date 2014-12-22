@@ -5,306 +5,487 @@ that are stored in a database an accessible using their Location as an identifie
 
 import logging
 import re
+import json
+import datetime
+from uuid import uuid4
 
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 import collections
+from contextlib import contextmanager
+import functools
+import threading
+from operator import itemgetter
+from sortedcontainers import SortedListWithKey
 
 from abc import ABCMeta, abstractmethod
+from contracts import contract, new_contract
 from xblock.plugin import default_select
 
 from .exceptions import InvalidLocationError, InsufficientSpecificationError
 from xmodule.errortracker import make_error_tracker
+from xmodule.assetstore import AssetMetadata
+from opaque_keys.edx.keys import CourseKey, UsageKey, AssetKey
+from opaque_keys.edx.locations import Location  # For import backwards compatibility
+from opaque_keys import InvalidKeyError
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 from xblock.runtime import Mixologist
 from xblock.core import XBlock
 
 log = logging.getLogger('edx.modulestore')
 
-SPLIT_MONGO_MODULESTORE_TYPE = 'split'
-MONGO_MODULESTORE_TYPE = 'mongo'
-XML_MODULESTORE_TYPE = 'xml'
-
-URL_RE = re.compile("""
-    (?P<tag>[^:]+)://?
-    (?P<org>[^/]+)/
-    (?P<course>[^/]+)/
-    (?P<category>[^/]+)/
-    (?P<name>[^@]+)
-    (@(?P<revision>[^/]+))?
-    """, re.VERBOSE)
-
-# TODO (cpennington): We should decide whether we want to expand the
-# list of valid characters in a location
-INVALID_CHARS = re.compile(r"[^\w.%-]", re.UNICODE)
-# Names are allowed to have colons.
-INVALID_CHARS_NAME = re.compile(r"[^\w.:%-]", re.UNICODE)
-
-# html ids can contain word chars and dashes
-INVALID_HTML_CHARS = re.compile(r"[^\w-]", re.UNICODE)
-
-_LocationBase = namedtuple('LocationBase', 'tag org course category name revision')
+new_contract('CourseKey', CourseKey)
+new_contract('AssetKey', AssetKey)
+new_contract('AssetMetadata', AssetMetadata)
+new_contract('SortedListWithKey', SortedListWithKey)
 
 
-def _check_location_part(val, regexp):
+class ModuleStoreEnum(object):
     """
-    Check that `regexp` doesn't match inside `val`. If it does, raise an exception
-
-    Args:
-        val (string): The value to check
-        regexp (re.RegexObject): The regular expression specifying invalid characters
-
-    Raises:
-        InvalidLocationError: Raised if any invalid character is found in `val`
+    A class to encapsulate common constants that are used with the various modulestores.
     """
-    if val is not None and regexp.search(val) is not None:
-        raise InvalidLocationError("Invalid characters in {!r}.".format(val))
 
-
-class Location(_LocationBase):
-    '''
-    Encodes a location.
-
-    Locations representations of URLs of the
-    form {tag}://{org}/{course}/{category}/{name}[@{revision}]
-
-    However, they can also be represented as dictionaries (specifying each component),
-    tuples or lists (specified in order), or as strings of the url
-    '''
-    __slots__ = ()
-
-    @staticmethod
-    def _clean(value, invalid):
+    class Type(object):
         """
-        invalid should be a compiled regexp of chars to replace with '_'
+        The various types of modulestores provided
         """
-        return re.sub('_+', '_', invalid.sub('_', value))
+        split = 'split'
+        mongo = 'mongo'
+        xml = 'xml'
 
-    @staticmethod
-    def clean(value):
+    class RevisionOption(object):
         """
-        Return value, made into a form legal for locations
+        Revision constants to use for Module Store operations
+        Note: These values are passed into store APIs and only used at run time
         """
-        return Location._clean(value, INVALID_CHARS)
+        # both DRAFT and PUBLISHED versions are queried, with preference to DRAFT versions
+        draft_preferred = 'rev-opt-draft-preferred'
 
-    @staticmethod
-    def clean_keeping_underscores(value):
+        # only DRAFT versions are queried and no PUBLISHED versions
+        draft_only = 'rev-opt-draft-only'
+
+        # # only PUBLISHED versions are queried and no DRAFT versions
+        published_only = 'rev-opt-published-only'
+
+        # all revisions are queried
+        all = 'rev-opt-all'
+
+    class Branch(object):
         """
-        Return value, replacing INVALID_CHARS, but not collapsing multiple '_' chars.
-        This for cleaning asset names, as the YouTube ID's may have underscores in them, and we need the
-        transcript asset name to match. In the future we may want to change the behavior of _clean.
+        Branch constants to use for stores, such as Mongo, that have only 2 branches: DRAFT and PUBLISHED
+        Note: These values are taken from server configuration settings, so should not be changed without alerting DevOps
         """
-        return INVALID_CHARS.sub('_', value)
+        draft_preferred = 'draft-preferred'
+        published_only = 'published-only'
 
-    @staticmethod
-    def clean_for_url_name(value):
+    class BranchName(object):
         """
-        Convert value into a format valid for location names (allows colons).
+        Branch constants to use for stores, such as Split, that have named branches
         """
-        return Location._clean(value, INVALID_CHARS_NAME)
+        draft = 'draft-branch'
+        published = 'published-branch'
+        library = 'library'
 
-    @staticmethod
-    def clean_for_html(value):
+    class UserID(object):
         """
-        Convert a string into a form that's safe for use in html ids, classes, urls, etc.
-        Replaces all INVALID_HTML_CHARS with '_', collapses multiple '_' chars
+        Values for user ID defaults
         """
-        return Location._clean(value, INVALID_HTML_CHARS)
+        # Note: we use negative values here to (try to) not collide
+        # with user identifiers provided by actual user services.
 
-    @staticmethod
-    def is_valid(value):
-        '''
-        Check if the value is a valid location, in any acceptable format.
-        '''
-        try:
-            Location(value)
-        except InvalidLocationError:
-            return False
-        return True
+        # user ID to use for all management commands
+        mgmt_command = -1
 
-    @staticmethod
-    def ensure_fully_specified(location):
-        '''Make sure location is valid, and fully specified.  Raises
-        InvalidLocationError or InsufficientSpecificationError if not.
+        # user ID to use for primitive commands
+        primitive_command = -2
 
-        returns a Location object corresponding to location.
-        '''
-        loc = Location(location)
-        for key, val in loc.dict().iteritems():
-            if key != 'revision' and val is None:
-                raise InsufficientSpecificationError(location)
-        return loc
+        # user ID to use for tests that do not have a django user available
+        test = -3
 
-    def __new__(_cls, loc_or_tag=None, org=None, course=None, category=None,
-                name=None, revision=None):
+    class SortOrder(object):
         """
-        Create a new location that is a clone of the specifed one.
-
-        location - Can be any of the following types:
-            string: should be of the form
-                    {tag}://{org}/{course}/{category}/{name}[@{revision}]
-
-            list: should be of the form [tag, org, course, category, name, revision]
-
-            dict: should be of the form {
-                'tag': tag,
-                'org': org,
-                'course': course,
-                'category': category,
-                'name': name,
-                'revision': revision,
-            }
-            Location: another Location object
-
-        In both the dict and list forms, the revision is optional, and can be
-        ommitted.
-
-        Components must be composed of alphanumeric characters, or the
-        characters '_', '-', and '.'.  The name component is additionally allowed to have ':',
-        which is interpreted specially for xml storage.
-
-        Components may be set to None, which may be interpreted in some contexts
-        to mean wildcard selection.
+        Values for sorting asset metadata.
         """
-        if (org is None and course is None and category is None and name is None and revision is None):
-            location = loc_or_tag
-        else:
-            location = (loc_or_tag, org, course, category, name, revision)
+        ascending = 1
+        descending = 2
 
-        if location is None:
-            return _LocationBase.__new__(_cls, *([None] * 6))
 
-        def check_dict(dict_):
-            # Order matters, so flatten out into a list
-            keys = ['tag', 'org', 'course', 'category', 'name', 'revision']
-            list_ = [dict_[k] for k in keys]
-            check_list(list_)
-
-        def check_list(list_):
-            list_ = list(list_)
-            for val in list_[:4] + [list_[5]]:
-                _check_location_part(val, INVALID_CHARS)
-            # names allow colons
-            _check_location_part(list_[4], INVALID_CHARS_NAME)
-
-        if isinstance(location, Location):
-            return location
-        elif isinstance(location, basestring):
-            match = URL_RE.match(location)
-            if match is None:
-                log.debug(u"location %r doesn't match URL", location)
-                raise InvalidLocationError(location)
-            groups = match.groupdict()
-            check_dict(groups)
-            return _LocationBase.__new__(_cls, **groups)
-        elif isinstance(location, (list, tuple)):
-            if len(location) not in (5, 6):
-                log.debug(u'location has wrong length')
-                raise InvalidLocationError(location)
-
-            if len(location) == 5:
-                args = tuple(location) + (None,)
-            else:
-                args = tuple(location)
-
-            check_list(args)
-            return _LocationBase.__new__(_cls, *args)
-        elif isinstance(location, dict):
-            kwargs = dict(location)
-            kwargs.setdefault('revision', None)
-
-            check_dict(kwargs)
-            return _LocationBase.__new__(_cls, **kwargs)
-        else:
-            raise InvalidLocationError(location)
-
-    def url(self):
-        """
-        Return a string containing the URL for this location
-        """
-        url = u"{0.tag}://{0.org}/{0.course}/{0.category}/{0.name}".format(self)
-        if self.revision:
-            url += u"@{rev}".format(rev=self.revision)  # pylint: disable=E1101
-        return url
-
-    def html_id(self):
-        """
-        Return a string with a version of the location that is safe for use in
-        html id attributes
-        """
-        id_string = u"-".join(v for v in self.list() if v is not None)
-        return Location.clean_for_html(id_string)
-
-    def dict(self):
-        """
-        Return an OrderedDict of this locations keys and values. The order is
-        tag, org, course, category, name, revision
-        """
-        return self._asdict()
-
-    def list(self):
-        return list(self)
-
-    def __str__(self):
-        return str(self.url().encode("utf-8"))
-
-    def __unicode__(self):
-        return self.url()
-
-    def __repr__(self):
-        return "Location%s" % repr(tuple(self))
+class BulkOpsRecord(object):
+    """
+    For handling nesting of bulk operations
+    """
+    def __init__(self):
+        self._active_count = 0
 
     @property
-    def course_id(self):
+    def active(self):
         """
-        Return the ID of the Course that this item belongs to by looking
-        at the location URL hierachy.
-
-        Throws an InvalidLocationError is this location does not represent a course.
+        Return whether this bulk write is active.
         """
-        if self.category != 'course':
-            raise InvalidLocationError(u'Cannot call course_id for {0} because it is not of category course'.format(self))
+        return self._active_count > 0
 
-        return "/".join([self.org, self.course, self.name])
-
-    COURSE_ID_RE = re.compile("""
-        (?P<org>[^/]+)/
-        (?P<course>[^/]+)/
-        (?P<name>.*)
-        """, re.VERBOSE)
-
-    @staticmethod
-    def parse_course_id(course_id):
+    def nest(self):
         """
-        Given a org/course/name course_id, return a dict of {"org": org, "course": course, "name": name}
-
-        If the course_id is not of the right format, raise ValueError
+        Record another level of nesting of this bulk write operation
         """
-        match = Location.COURSE_ID_RE.match(course_id)
-        if match is None:
-            raise ValueError("{} is not of form ORG/COURSE/NAME".format(course_id))
-        return match.groupdict()
+        self._active_count += 1
 
-    def _replace(self, **kwargs):
+    def unnest(self):
         """
-        Return a new :class:`Location` with values replaced
-        by the values specified in `**kwargs`
+        Record the completion of a level of nesting of the bulk write operation
         """
-        for name, value in kwargs.iteritems():
-            if name == 'name':
-                _check_location_part(value, INVALID_CHARS_NAME)
-            else:
-                _check_location_part(value, INVALID_CHARS)
+        self._active_count -= 1
 
-        # namedtuple is an old-style class, so don't use super
-        return _LocationBase._replace(self, **kwargs)
-
-    def replace(self, **kwargs):
-        '''
-        Expose a public method for replacing location elements
-        '''
-        return self._replace(**kwargs)
+    @property
+    def is_root(self):
+        """
+        Return whether the bulk write is at the root (first) level of nesting
+        """
+        return self._active_count == 1
 
 
-class ModuleStoreRead(object):
+class ActiveBulkThread(threading.local):
+    """
+    Add the expected vars to the thread.
+    """
+    def __init__(self, bulk_ops_record_type, **kwargs):
+        super(ActiveBulkThread, self).__init__(**kwargs)
+        self.records = defaultdict(bulk_ops_record_type)
+
+
+class BulkOperationsMixin(object):
+    """
+    This implements the :meth:`bulk_operations` modulestore semantics which handles nested invocations
+
+    In particular, it implements :meth:`_begin_bulk_operation` and
+    :meth:`_end_bulk_operation` to provide the external interface
+
+    Internally, this mixin records the set of all active bulk operations (keyed on the active course),
+    and only writes those values when :meth:`_end_bulk_operation` is called.
+    If a bulk write operation isn't active, then the changes are immediately written to the underlying
+    mongo_connection.
+    """
+    def __init__(self, *args, **kwargs):
+        super(BulkOperationsMixin, self).__init__(*args, **kwargs)
+        self._active_bulk_ops = ActiveBulkThread(self._bulk_ops_record_type)
+
+    @contextmanager
+    def bulk_operations(self, course_id):
+        """
+        A context manager for notifying the store of bulk operations. This affects only the current thread.
+
+        In the case of Mongo, it temporarily disables refreshing the metadata inheritance tree
+        until the bulk operation is completed.
+        """
+        try:
+            self._begin_bulk_operation(course_id)
+            yield
+        finally:
+            self._end_bulk_operation(course_id)
+
+    # the relevant type of bulk_ops_record for the mixin (overriding classes should override
+    # this variable)
+    _bulk_ops_record_type = BulkOpsRecord
+
+    def _get_bulk_ops_record(self, course_key, ignore_case=False):
+        """
+        Return the :class:`.BulkOpsRecord` for this course.
+        """
+        if course_key is None:
+            return self._bulk_ops_record_type()
+
+        # Retrieve the bulk record based on matching org/course/run (possibly ignoring case)
+        if ignore_case:
+            for key, record in self._active_bulk_ops.records.iteritems():
+                if (
+                    key.org.lower() == course_key.org.lower() and
+                    key.course.lower() == course_key.course.lower() and
+                    key.run.lower() == course_key.run.lower()
+                ):
+                    return record
+        return self._active_bulk_ops.records[course_key.for_branch(None)]
+
+    @property
+    def _active_records(self):
+        """
+        Yield all active (CourseLocator, BulkOpsRecord) tuples.
+        """
+        for course_key, record in self._active_bulk_ops.records.iteritems():
+            if record.active:
+                yield (course_key, record)
+
+    def _clear_bulk_ops_record(self, course_key):
+        """
+        Clear the record for this course
+        """
+        del self._active_bulk_ops.records[course_key.for_branch(None)]
+
+    def _start_outermost_bulk_operation(self, bulk_ops_record, course_key):
+        """
+        The outermost nested bulk_operation call: do the actual begin of the bulk operation.
+
+        Implementing classes must override this method; otherwise, the bulk operations are a noop
+        """
+        pass
+
+    def _begin_bulk_operation(self, course_key):
+        """
+        Begin a bulk operation on course_key.
+        """
+        bulk_ops_record = self._get_bulk_ops_record(course_key)
+
+        # Increment the number of active bulk operations (bulk operations
+        # on the same course can be nested)
+        bulk_ops_record.nest()
+
+        # If this is the highest level bulk operation, then initialize it
+        if bulk_ops_record.is_root:
+            self._start_outermost_bulk_operation(bulk_ops_record, course_key)
+
+    def _end_outermost_bulk_operation(self, bulk_ops_record, course_key):
+        """
+        The outermost nested bulk_operation call: do the actual end of the bulk operation.
+
+        Implementing classes must override this method; otherwise, the bulk operations are a noop
+        """
+        pass
+
+    def _end_bulk_operation(self, course_key):
+        """
+        End the active bulk operation on course_key.
+        """
+        # If no bulk op is active, return
+        bulk_ops_record = self._get_bulk_ops_record(course_key)
+        if not bulk_ops_record.active:
+            return
+
+        bulk_ops_record.unnest()
+
+        # If this wasn't the outermost context, then don't close out the
+        # bulk operation.
+        if bulk_ops_record.active:
+            return
+
+        self._end_outermost_bulk_operation(bulk_ops_record, course_key)
+
+        self._clear_bulk_ops_record(course_key)
+
+    def _is_in_bulk_operation(self, course_key, ignore_case=False):
+        """
+        Return whether a bulk operation is active on `course_key`.
+        """
+        return self._get_bulk_ops_record(course_key, ignore_case).active
+
+
+class ModuleStoreAssetInterface(object):
+    """
+    The methods for accessing assets and their metadata
+    """
+    @contract(asset_list='SortedListWithKey', asset_id='AssetKey')
+    def _find_asset_in_list(self, asset_list, asset_id):
+        """
+        Given a asset list that's a SortedListWithKey, find the index of a particular asset.
+        Returns: Index of asset, if found. None if not found.
+        """
+        # See if this asset already exists by checking the external_filename.
+        # Studio doesn't currently support using multiple course assets with the same filename.
+        # So use the filename as the unique identifier.
+        idx = None
+        idx_left = asset_list.bisect_left({'filename': asset_id.path})
+        idx_right = asset_list.bisect_right({'filename': asset_id.path})
+        if idx_left != idx_right:
+            # Asset was found in the list.
+            idx = idx_left
+        return idx
+
+    def _find_course_asset(self, asset_key):
+        """
+        Returns same as _find_course_assets plus the index to the given asset or None. Does not convert
+        to AssetMetadata; thus, is internal.
+
+        Arguments:
+            asset_key (AssetKey): what to look for
+
+        Returns:
+            Tuple of:
+            - AssetMetadata[] for all assets of the given asset_key's type
+            - the index of asset in list (None if asset does not exist)
+        """
+        course_assets = self._find_course_assets(asset_key.course_key)
+        all_assets = SortedListWithKey([], key=itemgetter('filename'))
+        # Assets should be pre-sorted, so add them efficiently without sorting.
+        # extend() will raise a ValueError if the passed-in list is not sorted.
+        all_assets.extend(course_assets.setdefault(asset_key.block_type, []))
+        idx = self._find_asset_in_list(all_assets, asset_key)
+
+        return course_assets, idx
+
+    @contract(asset_key='AssetKey')
+    def find_asset_metadata(self, asset_key, **kwargs):
+        """
+        Find the metadata for a particular course asset.
+
+        Arguments:
+            asset_key (AssetKey): key containing original asset filename
+
+        Returns:
+            asset metadata (AssetMetadata) -or- None if not found
+        """
+        course_assets, asset_idx = self._find_course_asset(asset_key)
+        if asset_idx is None:
+            return None
+
+        info = asset_key.block_type
+        mdata = AssetMetadata(asset_key, asset_key.path, **kwargs)
+        all_assets = course_assets[info]
+        mdata.from_storable(all_assets[asset_idx])
+        return mdata
+
+    @contract(
+        course_key='CourseKey', asset_type='None | basestring',
+        start='int | None', maxresults='int | None', sort='tuple(str,(int,>=1,<=2))|None'
+    )
+    def get_all_asset_metadata(self, course_key, asset_type, start=0, maxresults=-1, sort=None, **kwargs):
+        """
+        Returns a list of asset metadata for all assets of the given asset_type in the course.
+
+        Args:
+            course_key (CourseKey): course identifier
+            asset_type (str): the block_type of the assets to return. If None, return assets of all types.
+            start (int): optional - start at this asset number. Zero-based!
+            maxresults (int): optional - return at most this many, -1 means no limit
+            sort (array): optional - None means no sort
+                (sort_by (str), sort_order (str))
+                sort_by - one of 'uploadDate' or 'displayname'
+                sort_order - one of SortOrder.ascending or SortOrder.descending
+
+        Returns:
+            List of AssetMetadata objects.
+        """
+        course_assets = self._find_course_assets(course_key)
+
+        # Determine the proper sort - with defaults of ('displayname', SortOrder.ascending).
+        key_func = itemgetter('filename')
+        sort_order = ModuleStoreEnum.SortOrder.ascending
+        if sort:
+            if sort[0] == 'uploadDate':
+                key_func = lambda x: x['edit_info']['edited_on']
+            if sort[1] == ModuleStoreEnum.SortOrder.descending:
+                sort_order = ModuleStoreEnum.SortOrder.descending
+
+        if asset_type is None:
+            # Add assets of all types to the sorted list.
+            all_assets = SortedListWithKey([], key=key_func)
+            for asset_type, val in course_assets.iteritems():
+                all_assets.update(val)
+        else:
+            # Add assets of a single type to the sorted list.
+            all_assets = SortedListWithKey(course_assets.get(asset_type, []), key=key_func)
+        num_assets = len(all_assets)
+
+        start_idx = start
+        end_idx = min(num_assets, start + maxresults)
+        if maxresults < 0:
+            # No limit on the results.
+            end_idx = num_assets
+
+        step_incr = 1
+        if sort_order == ModuleStoreEnum.SortOrder.descending:
+            # Flip the indices and iterate backwards.
+            step_incr = -1
+            start_idx = (num_assets - 1) - start_idx
+            end_idx = (num_assets - 1) - end_idx
+
+        ret_assets = []
+        for idx in xrange(start_idx, end_idx, step_incr):
+            raw_asset = all_assets[idx]
+            asset_key = course_key.make_asset_key(raw_asset['asset_type'], raw_asset['filename'])
+            new_asset = AssetMetadata(asset_key)
+            new_asset.from_storable(raw_asset)
+            ret_assets.append(new_asset)
+        return ret_assets
+
+
+class ModuleStoreAssetWriteInterface(ModuleStoreAssetInterface):
+    """
+    The write operations for assets and asset metadata
+    """
+    @contract(asset_metadata='AssetMetadata')
+    def save_asset_metadata(self, asset_metadata, user_id, import_only):
+        """
+        Saves the asset metadata for a particular course's asset.
+
+        Arguments:
+            asset_metadata (AssetMetadata): data about the course asset data
+            user_id (int): user ID saving the asset metadata
+            import_only (bool): True if importing without editing, False if editing
+
+        Returns:
+            True if metadata save was successful, else False
+        """
+        raise NotImplementedError()
+
+    @contract(asset_metadata_list='list(AssetMetadata)')
+    def save_asset_metadata_list(self, asset_metadata_list, user_id, import_only):
+        """
+        Saves a list of asset metadata for a particular course's asset.
+
+        Arguments:
+            asset_metadata (AssetMetadata): data about the course asset data
+            user_id (int): user ID saving the asset metadata
+            import_only (bool): True if importing without editing, False if editing
+
+        Returns:
+            True if metadata save was successful, else False
+        """
+        raise NotImplementedError()
+
+    def set_asset_metadata_attrs(self, asset_key, attrs, user_id):
+        """
+        Base method to over-ride in modulestore.
+        """
+        raise NotImplementedError()
+
+    def delete_asset_metadata(self, asset_key, user_id):
+        """
+        Base method to over-ride in modulestore.
+        """
+        raise NotImplementedError()
+
+    @contract(asset_key='AssetKey', attr=str)
+    def set_asset_metadata_attr(self, asset_key, attr, value, user_id):
+        """
+        Add/set the given attr on the asset at the given location. Value can be any type which pymongo accepts.
+
+        Arguments:
+            asset_key (AssetKey): asset identifier
+            attr (str): which attribute to set
+            value: the value to set it to (any type pymongo accepts such as datetime, number, string)
+            user_id (int): user ID saving the asset metadata
+
+        Raises:
+            ItemNotFoundError if no such item exists
+            AttributeError is attr is one of the build in attrs.
+        """
+        return self.set_asset_metadata_attrs(asset_key, {attr: value}, user_id)
+
+    @contract(source_course_key='CourseKey', dest_course_key='CourseKey')
+    def copy_all_asset_metadata(self, source_course_key, dest_course_key, user_id):
+        """
+        Copy all the course assets from source_course_key to dest_course_key.
+        NOTE: unlike get_all_asset_metadata, this does not take an asset type because
+        this function is intended for things like cloning or exporting courses not for
+        clients to list assets.
+
+        Arguments:
+            source_course_key (CourseKey): identifier of course to copy from
+            dest_course_key (CourseKey): identifier of course to copy to
+            user_id (int): user ID copying the asset metadata
+        """
+        pass
+
+
+# pylint: disable=abstract-method
+class ModuleStoreRead(ModuleStoreAssetInterface):
     """
     An abstract interface for a database backend that stores XModuleDescriptor
     instances and extends read-only functionality
@@ -313,14 +494,14 @@ class ModuleStoreRead(object):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def has_item(self, course_id, location):
+    def has_item(self, usage_key):
         """
-        Returns True if location exists in this ModuleStore.
+        Returns True if usage_key exists in this ModuleStore.
         """
         pass
 
     @abstractmethod
-    def get_item(self, location, depth=0):
+    def get_item(self, usage_key, depth=0, **kwargs):
         """
         Returns an XModuleDescriptor instance for the item at location.
 
@@ -330,7 +511,7 @@ class ModuleStoreRead(object):
         If no object is found at that location, raises
             xmodule.modulestore.exceptions.ItemNotFoundError
 
-        location: Something that can be passed to Location
+        usage_key: A :class:`.UsageKey` subclass instance
 
         depth (int): An argument that some module stores may use to prefetch
             descendents of the queried modules for more efficient results later
@@ -340,44 +521,111 @@ class ModuleStoreRead(object):
         pass
 
     @abstractmethod
-    def get_instance(self, course_id, location, depth=0):
-        """
-        Get an instance of this location, with policy for course_id applied.
-        TODO (vshnayder): this may want to live outside the modulestore eventually
-        """
-        pass
-
-    @abstractmethod
-    def get_item_errors(self, location):
+    def get_course_errors(self, course_key):
         """
         Return a list of (msg, exception-or-None) errors that the modulestore
-        encountered when loading the item at location.
-
-        location : something that can be passed to Location
+        encountered when loading the course at course_id.
 
         Raises the same exceptions as get_item if the location isn't found or
         isn't fully specified.
+
+        Args:
+            course_key (:class:`.CourseKey`): The course to check for errors
         """
         pass
 
     @abstractmethod
-    def get_items(self, location, course_id=None, depth=0, qualifiers=None):
+    def get_items(self, course_id, qualifiers=None, **kwargs):
         """
         Returns a list of XModuleDescriptor instances for the items
         that match location. Any element of location that is None is treated
         as a wildcard that matches any value
 
         location: Something that can be passed to Location
+        """
+        pass
 
-        depth: An argument that some module stores may use to prefetch
-            descendents of the queried modules for more efficient results later
-            in the request. The depth is counted in the number of calls to
-            get_children() to cache. None indicates to cache all descendents
+    def _block_matches(self, fields_or_xblock, qualifiers):
+        '''
+        Return True or False depending on whether the field value (block contents)
+        matches the qualifiers as per get_items. Note, only finds directly set not
+        inherited nor default value matches.
+        For substring matching pass a regex object.
+        for arbitrary function comparison such as date time comparison, pass
+        the function as in start=lambda x: x < datetime.datetime(2014, 1, 1, 0, tzinfo=pytz.UTC)
+
+        Args:
+            fields_or_xblock (dict or XBlock): either the json blob (from the db or get_explicitly_set_fields)
+                or the xblock.fields() value or the XBlock from which to get those values
+             qualifiers (dict): field: searchvalue pairs.
+        '''
+        if isinstance(fields_or_xblock, XBlock):
+            fields = fields_or_xblock.fields
+            xblock = fields_or_xblock
+            is_xblock = True
+        else:
+            fields = fields_or_xblock
+            is_xblock = False
+
+        def _is_set_on(key):
+            """
+            Is this key set in fields? (return tuple of boolean and value). A helper which can
+            handle fields either being the json doc or xblock fields. Is inner function to restrict
+            use and to access local vars.
+            """
+            if key not in fields:
+                return False, None
+            field = fields[key]
+            if is_xblock:
+                return field.is_set_on(fields_or_xblock), getattr(xblock, key)
+            else:
+                return True, field
+
+        for key, criteria in qualifiers.iteritems():
+            is_set, value = _is_set_on(key)
+            if not is_set:
+                return False
+            if not self._value_matches(value, criteria):
+                return False
+        return True
+
+    def _value_matches(self, target, criteria):
+        '''
+        helper for _block_matches: does the target (field value) match the criteria?
+
+        If target is a list, do any of the list elements meet the criteria
+        If the criteria is a regex, does the target match it?
+        If the criteria is a function, does invoking it on the target yield something truthy?
+        If criteria is a dict {($nin|$in): []}, then do (none|any) of the list elements meet the criteria
+        Otherwise, is the target == criteria
+        '''
+        if isinstance(target, list):
+            return any(self._value_matches(ele, criteria) for ele in target)
+        elif isinstance(criteria, re._pattern_type):  # pylint: disable=protected-access
+            return criteria.search(target) is not None
+        elif callable(criteria):
+            return criteria(target)
+        elif isinstance(criteria, dict) and '$in' in criteria:
+            # note isn't handling any other things in the dict other than in
+            return any(self._value_matches(target, test_val) for test_val in criteria['$in'])
+        elif isinstance(criteria, dict) and '$nin' in criteria:
+            # note isn't handling any other things in the dict other than nin
+            return not any(self._value_matches(target, test_val) for test_val in criteria['$nin'])
+        else:
+            return criteria == target
+
+    @abstractmethod
+    def make_course_key(self, org, course, run):
+        """
+        Return a valid :class:`~opaque_keys.edx.keys.CourseKey` for this modulestore
+        that matches the supplied `org`, `course`, and `run`.
+
+        This key may represent a course that doesn't exist in this modulestore.
         """
         pass
 
     @abstractmethod
-    def get_courses(self):
+    def get_courses(self, **kwargs):
         '''
         Returns a list containing the top level XModuleDescriptors of the courses
         in this modulestore.
@@ -385,23 +633,34 @@ class ModuleStoreRead(object):
         pass
 
     @abstractmethod
-    def get_course(self, course_id):
+    def get_course(self, course_id, depth=0, **kwargs):
         '''
-        Look for a specific course id.  Returns the course descriptor, or None if not found.
+        Look for a specific course by its id (:class:`CourseKey`).
+        Returns the course descriptor, or None if not found.
         '''
         pass
 
     @abstractmethod
-    def get_parent_locations(self, location, course_id):
-        '''Find all locations that are the parents of this location in this
+    def has_course(self, course_id, ignore_case=False, **kwargs):
+        '''
+        Look for a specific course id.  Returns whether it exists.
+        Args:
+            course_id (CourseKey):
+            ignore_case (boolean): some modulestores are case-insensitive. Use this flag
+                to search for whether a potentially conflicting course exists in that case.
+        '''
+        pass
+
+    @abstractmethod
+    def get_parent_location(self, location, **kwargs):
+        '''
+        Find the location that is the parent of this location in this
         course.  Needed for path_to_location().
-
-        returns an iterable of things that can be passed to Location.
         '''
         pass
 
     @abstractmethod
-    def get_orphans(self, course_location, branch):
+    def get_orphans(self, course_key, **kwargs):
         """
         Get all of the xblocks in the given course which have no parents and are not of types which are
         usually orphaned. NOTE: may include xblocks which still have references via xblocks which don't
@@ -425,8 +684,49 @@ class ModuleStoreRead(object):
         """
         pass
 
+    @abstractmethod
+    def get_courses_for_wiki(self, wiki_slug, **kwargs):
+        """
+        Return the list of courses which use this wiki_slug
+        :param wiki_slug: the course wiki root slug
+        :return: list of course keys
+        """
+        pass
 
-class ModuleStoreWrite(ModuleStoreRead):
+    @abstractmethod
+    def has_published_version(self, xblock):
+        """
+        Returns true if this xblock exists in the published course regardless of whether it's up to date
+        """
+        pass
+
+    @abstractmethod
+    def close_connections(self):
+        """
+        Closes any open connections to the underlying databases
+        """
+        pass
+
+    @contextmanager
+    def bulk_operations(self, course_id):
+        """
+        A context manager for notifying the store of bulk operations. This affects only the current thread.
+        """
+        yield
+
+    def ensure_indexes(self):
+        """
+        Ensure that all appropriate indexes are created that are needed by this modulestore, or raise
+        an exception if unable to.
+
+        This method is intended for use by tests and administrative commands, and not
+        to be run during server startup.
+        """
+        pass
+
+
+# pylint: disable=abstract-method
+class ModuleStoreWrite(ModuleStoreRead, ModuleStoreAssetWriteInterface):
     """
     An abstract interface for a database backend that stores XModuleDescriptor
     instances and extends both read and write functionality
@@ -435,7 +735,7 @@ class ModuleStoreWrite(ModuleStoreRead):
     __metaclass__ = ABCMeta
 
     @abstractmethod
-    def update_item(self, xblock, user_id=None, allow_not_found=False, force=False):
+    def update_item(self, xblock, user_id, allow_not_found=False, force=False, **kwargs):
         """
         Update the given xblock's persisted repr. Pass the user's unique id which the persistent store
         should save with the update if it has that ability.
@@ -445,39 +745,117 @@ class ModuleStoreWrite(ModuleStoreRead):
         :param force: fork the structure and don't update the course draftVersion if there's a version
         conflict (only applicable to version tracking and conflict detecting persistence stores)
 
-        :raises VersionConflictError: if package_id and version_guid given and the current
+        :raises VersionConflictError: if org, course, run, and version_guid given and the current
         version head != version_guid and force is not True. (only applicable to version tracking stores)
         """
         pass
 
     @abstractmethod
-    def delete_item(self, location, user_id=None, **kwargs):
+    def delete_item(self, location, user_id, **kwargs):
         """
-        Delete an item from persistence. Pass the user's unique id which the persistent store
+        Delete an item and its subtree from persistence. Remove the item from any parents (Note, does not
+        affect parents from other branches or logical branches; thus, in old mongo, deleting something
+        whose parent cannot be draft, deletes it from both but deleting a component under a draft vertical
+        only deletes it from the draft.
+
+        Pass the user's unique id which the persistent store
         should save with the update if it has that ability.
 
-        :param delete_all_versions: removes both the draft and published version of this item from
-        the course if using draft and old mongo. Split may or may not implement this.
         :param force: fork the structure and don't update the course draftVersion if there's a version
         conflict (only applicable to version tracking and conflict detecting persistence stores)
 
-        :raises VersionConflictError: if package_id and version_guid given and the current
+        :raises VersionConflictError: if org, course, run, and version_guid given and the current
         version head != version_guid and force is not True. (only applicable to version tracking stores)
         """
         pass
 
+    @abstractmethod
+    def create_course(self, org, course, run, user_id, fields=None, **kwargs):
+        """
+        Creates and returns the course.
 
-class ModuleStoreReadBase(ModuleStoreRead):
+        Args:
+            org (str): the organization that owns the course
+            course (str): the name of the course
+            run (str): the name of the run
+            user_id: id of the user creating the course
+            fields (dict): Fields to set on the course at initialization
+            kwargs: Any optional arguments understood by a subset of modulestores to customize instantiation
+
+        Returns: a CourseDescriptor
+        """
+        pass
+
+    @abstractmethod
+    def create_item(self, user_id, course_key, block_type, block_id=None, fields=None, **kwargs):
+        """
+        Creates and saves a new item in a course.
+
+        Returns the newly created item.
+
+        Args:
+            user_id: ID of the user creating and saving the xmodule
+            course_key: A :class:`~opaque_keys.edx.CourseKey` identifying which course to create
+                this item in
+            block_type: The type of block to create
+            block_id: a unique identifier for the new item. If not supplied,
+                a new identifier will be generated
+            fields (dict): A dictionary specifying initial values for some or all fields
+                in the newly created block
+        """
+        pass
+
+    @abstractmethod
+    def clone_course(self, source_course_id, dest_course_id, user_id, fields=None):
+        """
+        Sets up source_course_id to point a course with the same content as the desct_course_id. This
+        operation may be cheap or expensive. It may have to copy all assets and all xblock content or
+        merely setup new pointers.
+
+        Backward compatibility: this method used to require in some modulestores that dest_course_id
+        pointed to an empty but already created course. Implementers should support this or should
+        enable creating the course from scratch.
+
+        Raises:
+            ItemNotFoundError: if the source course doesn't exist (or any of its xblocks aren't found)
+            DuplicateItemError: if the destination course already exists (with content in some cases)
+        """
+        pass
+
+    @abstractmethod
+    def delete_course(self, course_key, user_id, **kwargs):
+        """
+        Deletes the course. It may be a soft or hard delete. It may or may not remove the xblock definitions
+        depending on the persistence layer and how tightly bound the xblocks are to the course.
+
+        Args:
+            course_key (CourseKey): which course to delete
+            user_id: id of the user deleting the course
+        """
+        pass
+
+    @abstractmethod
+    def _drop_database(self):
+        """
+        A destructive operation to drop the underlying database and close all connections.
+        Intended to be used by test code for cleanup.
+        """
+        pass
+
+
+# pylint: disable=abstract-method
+class ModuleStoreReadBase(BulkOperationsMixin, ModuleStoreRead):
     '''
     Implement interface functionality that can be shared.
     '''
-    # pylint: disable=W0613
 
+    # pylint: disable=invalid-name
     def __init__(
         self,
+        contentstore=None,
         doc_store_config=None,  # ignore if passed up
         metadata_inheritance_cache_subsystem=None, request_cache=None,
-        modulestore_update_signal=None, xblock_mixins=(), xblock_select=None,
+        xblock_mixins=(), xblock_select=None,
         # temporary parms to enable backward compatibility. remove once all envs migrated
         db=None, collection=None, host=None, port=None, tz_aware=True, user=None, password=None,
         # allow lower level init args to pass harmlessly
@@ -486,38 +864,27 @@ class ModuleStoreReadBase(ModuleStoreRead):
         '''
         Set up the error-tracking logic.
         '''
-        self._location_errors = {}  # location -> ErrorLog
+        super(ModuleStoreReadBase, self).__init__(**kwargs)
+        self._course_errors = defaultdict(make_error_tracker)  # location -> ErrorLog
+        # pylint: disable=fixme
+        # TODO move the inheritance_cache_subsystem to classes which use it
         self.metadata_inheritance_cache_subsystem = metadata_inheritance_cache_subsystem
-        self.modulestore_update_signal = modulestore_update_signal
         self.request_cache = request_cache
         self.xblock_mixins = xblock_mixins
         self.xblock_select = xblock_select
+        self.contentstore = contentstore
 
-    def _get_errorlog(self, location):
+    def get_course_errors(self, course_key):
         """
-        If we already have an errorlog for this location, return it.  Otherwise,
-        create one.
-        """
-        location = Location(location)
-        if location not in self._location_errors:
-            self._location_errors[location] = make_error_tracker()
-        return self._location_errors[location]
-
-    def get_item_errors(self, location):
-        """
-        Return list of errors for this location, if any.  Raise the same
-        errors as get_item if location isn't present.
-
-        NOTE: For now, the only items that track errors are CourseDescriptors in
-        the xml datastore.  This will return an empty list for all other items
-        and datastores.
+        Return list of errors for this :class:`.CourseKey`, if any.  Raise the same
+        errors as get_item if course_key isn't present.
         """
         # check that item is present and raise the promised exceptions if needed
+        # pylint: disable=fixme
         # TODO (vshnayder): post-launch, make errors properties of items
         # self.get_item(location)
-
-        errorlog = self._get_errorlog(location)
-        return errorlog.errors
+        assert(isinstance(course_key, CourseKey))
+        return self._course_errors[course_key].errors
 
     def get_errored_courses(self):
         """
@@ -528,52 +895,117 @@ class ModuleStoreReadBase(ModuleStoreRead):
         """
         return {}
 
-    def get_course(self, course_id):
-        """Default impl--linear search through course list"""
-        for c in self.get_courses():
-            if c.id == course_id:
-                return c
+    def get_course(self, course_id, depth=0, **kwargs):
+        """
+        See ModuleStoreRead.get_course
+
+        Default impl--linear search through course list
+        """
+        assert(isinstance(course_id, CourseKey))
+        for course in self.get_courses(**kwargs):
+            if course.id == course_id:
+                return course
         return None
 
-    def update_item(self, xblock, user_id=None, allow_not_found=False, force=False):
+    def has_course(self, course_id, ignore_case=False, **kwargs):
         """
-        Update the given xblock's persisted repr. Pass the user's unique id which the persistent store
-        should save with the update if it has that ability.
-
-        :param allow_not_found: whether this method should raise an exception if the given xblock
-        has not been persisted before.
-        :param force: fork the structure and don't update the course draftVersion if there's a version
-        conflict (only applicable to version tracking and conflict detecting persistence stores)
-
-        :raises VersionConflictError: if package_id and version_guid given and the current
-        version head != version_guid and force is not True. (only applicable to version tracking stores)
+        Returns the course_id of the course if it was found, else None
+        Args:
+            course_id (CourseKey):
+            ignore_case (boolean): some modulestores are case-insensitive. Use this flag
+                to search for whether a potentially conflicting course exists in that case.
         """
-        raise NotImplementedError
+        # linear search through list
+        assert(isinstance(course_id, CourseKey))
+        if ignore_case:
+            return next(
+                (
+                    c.id for c in self.get_courses()
+                    if c.id.org.lower() == course_id.org.lower() and
+                    c.id.course.lower() == course_id.course.lower() and
+                    c.id.run.lower() == course_id.run.lower()
+                ),
+                None
+            )
+        else:
+            return next(
+                (c.id for c in self.get_courses() if c.id == course_id),
+                None
+            )
 
-    def delete_item(self, location, user_id=None, delete_all_versions=False, delete_children=False, force=False):
+    def has_published_version(self, xblock):
         """
-        Delete an item from persistence. Pass the user's unique id which the persistent store
-        should save with the update if it has that ability.
-
-        :param delete_all_versions: removes both the draft and published version of this item from
-        the course if using draft and old mongo. Split may or may not implement this.
-        :param force: fork the structure and don't update the course draftVersion if there's a version
-        conflict (only applicable to version tracking and conflict detecting persistence stores)
-
-        :raises VersionConflictError: if package_id and version_guid given and the current
-        version head != version_guid and force is not True. (only applicable to version tracking stores)
+        Returns True since this is a read-only store.
         """
-        raise NotImplementedError
+        return True
 
+    def heartbeat(self):
+        """
+        Is this modulestore ready?
+        """
+        # default is to say yes by not raising an exception
+        return {'default_impl': True}
+
+    def close_connections(self):
+        """
+        Closes any open connections to the underlying databases
+        """
+        if self.contentstore:
+            self.contentstore.close_connections()
+        super(ModuleStoreReadBase, self).close_connections()
+
+    @contextmanager
+    def default_store(self, store_type):
+        """
+        A context manager for temporarily changing the default store
+        """
+        if self.get_modulestore_type(None) != store_type:
+            raise ValueError(u"Cannot set default store to type {}".format(store_type))
+        yield
+
+    @staticmethod
+    def memoize_request_cache(func):
+        """
+        Memoize a function call results on the request_cache if there's one. Creates the cache key by
+        joining the unicode of all the args with &; so, if your arg may use the default &, it may
+        have false hits
+        """
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            """
+            Wraps a method to memoize results.
+            """
+            if self.request_cache:
+                cache_key = '&'.join([hashvalue(arg) for arg in args])
+                if cache_key in self.request_cache.data.setdefault(func.__name__, {}):
+                    return self.request_cache.data[func.__name__][cache_key]
+
+                result = func(self, *args, **kwargs)
+
+                self.request_cache.data[func.__name__][cache_key] = result
+                return result
+            else:
+                return func(self, *args, **kwargs)
+        return wrapper
+
+
+def hashvalue(arg):
+    """
+    If arg is an xblock, use its location. otherwise just turn it into a string
+    """
+    if isinstance(arg, XBlock):
+        return unicode(arg.location)
+    else:
+        return unicode(arg)
+
+
+# pylint: disable=abstract-method
 class ModuleStoreWriteBase(ModuleStoreReadBase, ModuleStoreWrite):
     '''
     Implement interface functionality that can be shared.
     '''
-    def __init__(self, **kwargs):
-        super(ModuleStoreWriteBase, self).__init__(**kwargs)
-        # TODO: Don't have a runtime just to generate the appropriate mixin classes (cpennington)
-        # This is only used by partition_fields_by_scope, which is only needed because
-        # the split mongo store is used for item creation as well as item persistence
+    def __init__(self, contentstore, **kwargs):
+        super(ModuleStoreWriteBase, self).__init__(contentstore=contentstore, **kwargs)
         self.mixologist = Mixologist(self.xblock_mixins)
 
     def partition_fields_by_scope(self, category, fields):
@@ -583,14 +1015,85 @@ class ModuleStoreWriteBase(ModuleStoreReadBase, ModuleStoreWrite):
         :param category: the xblock category
         :param fields: the dictionary of {fieldname: value}
         """
-        if fields is None:
-            return {}
-        cls = self.mixologist.mix(XBlock.load_class(category, select=prefer_xmodules))
         result = collections.defaultdict(dict)
+        if fields is None:
+            return result
+        cls = self.mixologist.mix(XBlock.load_class(category, select=prefer_xmodules))
         for field_name, value in fields.iteritems():
             field = getattr(cls, field_name)
             result[field.scope][field_name] = value
         return result
+
+    def create_course(self, org, course, run, user_id, fields=None, runtime=None, **kwargs):
+        """
+        Creates any necessary other things for the course as a side effect and doesn't return
+        anything useful. The real subclass should call this before it returns the course.
+        """
+        # clone a default 'about' overview module as well
+        about_location = self.make_course_key(org, course, run).make_usage_key('about', 'overview')
+
+        about_descriptor = XBlock.load_class('about')
+        overview_template = about_descriptor.get_template('overview.yaml')
+        self.create_item(
+            user_id,
+            about_location.course_key,
+            about_location.block_type,
+            block_id=about_location.block_id,
+            definition_data={'data': overview_template.get('data')},
+            metadata=overview_template.get('metadata'),
+            runtime=runtime,
+            continue_version=True,
+        )
+
+    def clone_course(self, source_course_id, dest_course_id, user_id, fields=None, **kwargs):
+        """
+        This base method just copies the assets. The lower level impls must do the actual cloning of
+        content.
+        """
+        # copy the assets
+        if self.contentstore:
+            self.contentstore.copy_all_course_assets(source_course_id, dest_course_id)
+        return dest_course_id
+
+    def delete_course(self, course_key, user_id, **kwargs):
+        """
+        This base method just deletes the assets. The lower level impls must do the actual deleting of
+        content.
+        """
+        # delete the assets
+        if self.contentstore:
+            self.contentstore.delete_all_course_assets(course_key)
+        super(ModuleStoreWriteBase, self).delete_course(course_key, user_id)
+
+    def _drop_database(self):
+        """
+        A destructive operation to drop the underlying database and close all connections.
+        Intended to be used by test code for cleanup.
+        """
+        if self.contentstore:
+            self.contentstore._drop_database()  # pylint: disable=protected-access
+        super(ModuleStoreWriteBase, self)._drop_database()  # pylint: disable=protected-access
+
+    def create_child(self, user_id, parent_usage_key, block_type, block_id=None, fields=None, **kwargs):
+        """
+        Creates and saves a new xblock that as a child of the specified block
+
+        Returns the newly created item.
+
+        Args:
+            user_id: ID of the user creating and saving the xmodule
+            parent_usage_key: a :class:`~opaque_key.edx.UsageKey` identifing the
+                block that this item should be parented under
+            block_type: The type of block to create
+            block_id: a unique identifier for the new item. If not supplied,
+                a new identifier will be generated
+            fields (dict): A dictionary specifying initial values for some or all fields
+                in the newly created block
+        """
+        item = self.create_item(user_id, parent_usage_key.course_key, block_type, block_id=block_id, fields=fields, **kwargs)
+        parent = self.get_item(parent_usage_key)
+        parent.children.append(item.location)
+        self.update_item(parent, user_id)
 
 
 def only_xmodules(identifier, entry_points):
@@ -607,3 +1110,25 @@ def prefer_xmodules(identifier, entry_points):
         return default_select(identifier, from_xmodule)
     else:
         return default_select(identifier, entry_points)
+
+
+class EdxJSONEncoder(json.JSONEncoder):
+    """
+    Custom JSONEncoder that handles `Location` and `datetime.datetime` objects.
+
+    `Location`s are encoded as their url string form, and `datetime`s as
+    ISO date strings
+    """
+    def default(self, obj):
+        if isinstance(obj, (CourseKey, UsageKey)):
+            return unicode(obj)
+        elif isinstance(obj, datetime.datetime):
+            if obj.tzinfo is not None:
+                if obj.utcoffset() is None:
+                    return obj.isoformat() + 'Z'
+                else:
+                    return obj.isoformat()
+            else:
+                return obj.isoformat()
+        else:
+            return super(EdxJSONEncoder, self).default(obj)

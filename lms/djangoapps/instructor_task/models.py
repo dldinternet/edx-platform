@@ -18,7 +18,6 @@ from uuid import uuid4
 import csv
 import json
 import hashlib
-import os
 import os.path
 import urllib
 
@@ -28,6 +27,8 @@ from boto.s3.key import Key
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models, transaction
+
+from xmodule_django.models import CourseKeyField
 
 
 # define custom states used by InstructorTask
@@ -58,7 +59,7 @@ class InstructorTask(models.Model):
     `updated` stores date that entry was last modified
     """
     task_type = models.CharField(max_length=50, db_index=True)
-    course_id = models.CharField(max_length=255, db_index=True)
+    course_id = CourseKeyField(max_length=255, db_index=True)
     task_key = models.CharField(max_length=255, db_index=True)
     task_input = models.CharField(max_length=255)
     task_id = models.CharField(max_length=255, db_index=True)  # max_length from celery_taskmeta
@@ -159,7 +160,7 @@ class InstructorTask(models.Model):
         Truncation is indicated by adding "..." to the end of the value.
         """
         tag = '...'
-        task_progress = {'exception': type(exception).__name__, 'message': str(exception.message)}
+        task_progress = {'exception': type(exception).__name__, 'message': unicode(exception.message)}
         if traceback_string is not None:
             # truncate any traceback that goes into the InstructorTask model:
             task_progress['traceback'] = traceback_string
@@ -208,6 +209,15 @@ class ReportStore(object):
         elif storage_type.lower() == "localfs":
             return LocalFSReportStore.from_config()
 
+    def _get_utf8_encoded_rows(self, rows):
+        """
+        Given a list of `rows` containing unicode strings, return a
+        new list of rows with those strings encoded as utf-8 for CSV
+        compatibility.
+        """
+        for row in rows:
+            yield [unicode(item).encode('utf-8') for item in row]
+
 
 class S3ReportStore(ReportStore):
     """
@@ -228,6 +238,7 @@ class S3ReportStore(ReportStore):
             settings.AWS_ACCESS_KEY_ID,
             settings.AWS_SECRET_ACCESS_KEY
         )
+
         self.bucket = conn.get_bucket(bucket_name)
 
     @classmethod
@@ -251,9 +262,9 @@ class S3ReportStore(ReportStore):
         )
 
     def key_for(self, course_id, filename):
-        """Return the S3 key we would use to store and retrive the data for the
+        """Return the S3 key we would use to store and retrieve the data for the
         given filename."""
-        hashed_course_id = hashlib.sha1(course_id)
+        hashed_course_id = hashlib.sha1(course_id.to_deprecated_string())
 
         key = Key(self.bucket)
         key.key = "{}/{}/{}".format(
@@ -305,7 +316,8 @@ class S3ReportStore(ReportStore):
         """
         output_buffer = StringIO()
         gzip_file = GzipFile(fileobj=output_buffer, mode="wb")
-        csv.writer(gzip_file).writerows(rows)
+        csvwriter = csv.writer(gzip_file)
+        csvwriter.writerows(self._get_utf8_encoded_rows(rows))
         gzip_file.close()
 
         self.store(course_id, filename, output_buffer)
@@ -316,13 +328,10 @@ class S3ReportStore(ReportStore):
         can be plugged straight into an href
         """
         course_dir = self.key_for(course_id, '')
-        return sorted(
-            [
-                (key.key.split("/")[-1], key.generate_url(expires_in=300))
-                for key in self.bucket.list(prefix=course_dir.key)
-            ],
-            reverse=True
-        )
+        return [
+            (key.key.split("/")[-1], key.generate_url(expires_in=300))
+            for key in sorted(self.bucket.list(prefix=course_dir.key), reverse=True, key=lambda k: k.last_modified)
+        ]
 
 
 class LocalFSReportStore(ReportStore):
@@ -360,7 +369,7 @@ class LocalFSReportStore(ReportStore):
 
     def path_to(self, course_id, filename):
         """Return the full path to a given file for a given course."""
-        return os.path.join(self.root_path, urllib.quote(course_id, safe=''), filename)
+        return os.path.join(self.root_path, urllib.quote(course_id.to_deprecated_string(), safe=''), filename)
 
     def store(self, course_id, filename, buff):
         """
@@ -383,7 +392,9 @@ class LocalFSReportStore(ReportStore):
         write this data out.
         """
         output_buffer = StringIO()
-        csv.writer(output_buffer).writerows(rows)
+        csvwriter = csv.writer(output_buffer)
+        csvwriter.writerows(self._get_utf8_encoded_rows(rows))
+
         self.store(course_id, filename, output_buffer)
 
     def links_for(self, course_id):
@@ -397,10 +408,10 @@ class LocalFSReportStore(ReportStore):
         course_dir = self.path_to(course_id, '')
         if not os.path.exists(course_dir):
             return []
-        return sorted(
-            [
-                (filename, ("file://" + urllib.quote(os.path.join(course_dir, filename))))
-                for filename in os.listdir(course_dir)
-            ],
-            reverse=True
-        )
+        files = [(filename, os.path.join(course_dir, filename)) for filename in os.listdir(course_dir)]
+        files.sort(key=lambda (filename, full_path): os.path.getmtime(full_path), reverse=True)
+
+        return [
+            (filename, ("file://" + urllib.quote(full_path)))
+            for filename, full_path in files
+        ]

@@ -4,25 +4,24 @@ This test file will test registration, login, activation, and session activity t
 import time
 import mock
 import unittest
+from ddt import ddt, data, unpack
 
 from django.test.utils import override_settings
 from django.core.cache import cache
-from django.core.urlresolvers import reverse
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.core.urlresolvers import reverse
 
 from contentstore.tests.utils import parse_json, user, registration, AjaxEnabledTestClient
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from contentstore.tests.test_course_settings import CourseTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
-from contentstore.tests.modulestore_config import TEST_MODULESTORE
 import datetime
 from pytz import UTC
 
 from freezegun import freeze_time
 
 
-@override_settings(MODULESTORE=TEST_MODULESTORE)
 class ContentStoreTestCase(ModuleStoreTestCase):
     def _login(self, email, password):
         """
@@ -235,13 +234,13 @@ class AuthTestCase(ContentStoreTestCase):
     def test_private_pages_auth(self):
         """Make sure pages that do require login work."""
         auth_pages = (
-            '/course',
+            '/course/',
         )
 
         # These are pages that should just load when the user is logged in
         # (no data needed)
         simple_auth_pages = (
-            '/course',
+            '/course/',
         )
 
         # need an activated user
@@ -267,7 +266,7 @@ class AuthTestCase(ContentStoreTestCase):
     def test_index_auth(self):
 
         # not logged in.  Should return a redirect.
-        resp = self.client.get_html('/course')
+        resp = self.client.get_html('/course/')
         self.assertEqual(resp.status_code, 302)
 
         # Logged in should work.
@@ -284,16 +283,17 @@ class AuthTestCase(ContentStoreTestCase):
         self.login(self.email, self.pw)
 
         # make sure we can access courseware immediately
-        resp = self.client.get_html('/course')
+        course_url = '/course/'
+        resp = self.client.get_html(course_url)
         self.assertEquals(resp.status_code, 200)
 
         # then wait a bit and see if we get timed out
         time.sleep(2)
 
-        resp = self.client.get_html('/course')
+        resp = self.client.get_html(course_url)
 
         # re-request, and we should get a redirect to login page
-        self.assertRedirects(resp, settings.LOGIN_REDIRECT_URL + '?next=/course')
+        self.assertRedirects(resp, settings.LOGIN_REDIRECT_URL + '?next=/course/')
 
 
 class ForumTestCase(CourseTestCase):
@@ -316,3 +316,30 @@ class ForumTestCase(CourseTestCase):
         ]
         self.course.discussion_blackouts = [(t.isoformat(), t2.isoformat()) for t, t2 in times2]
         self.assertFalse(self.course.forum_posts_allowed)
+
+
+@ddt
+class CourseKeyVerificationTestCase(CourseTestCase):
+    def setUp(self):
+        """
+        Create test course.
+        """
+        super(CourseKeyVerificationTestCase, self).setUp()
+        self.course = CourseFactory.create(org='edX', number='test_course_key', display_name='Test Course')
+
+    @data(('edX/test_course_key/Test_Course', 200), ('garbage:edX+test_course_key+Test_Course', 404))
+    @unpack
+    def test_course_key_decorator(self, course_key, status_code):
+        """
+        Tests for the ensure_valid_course_key decorator.
+        """
+        url = '/import/{course_key}'.format(course_key=course_key)
+        resp = self.client.get_html(url)
+        self.assertEqual(resp.status_code, status_code)
+
+        url = '/import_status/{course_key}/{filename}'.format(
+            course_key=course_key,
+            filename='xyz.tar.gz'
+        )
+        resp = self.client.get_html(url)
+        self.assertEqual(resp.status_code, status_code)

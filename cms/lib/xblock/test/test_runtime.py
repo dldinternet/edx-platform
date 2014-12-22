@@ -13,9 +13,8 @@ class TestHandlerUrl(TestCase):
 
     def setUp(self):
         self.block = Mock()
-        self.course_id = "org/course/run"
 
-    def test_trailing_charecters(self):
+    def test_trailing_characters(self):
         self.assertFalse(handler_url(self.block, 'handler').endswith('?'))
         self.assertFalse(handler_url(self.block, 'handler').endswith('/'))
 

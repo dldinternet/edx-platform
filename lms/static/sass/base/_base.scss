@@ -55,6 +55,15 @@ span {
   font: inherit;
 }
 
+.text-center {
+  text-align: center;
+}
+
+.text-dark-grey {
+  color: $dark-gray1;
+  font-size: 24px;
+}
+
 p + p, ul + p, ol + p {
   margin-top: 20px;
 }
@@ -107,6 +116,7 @@ a:focus {
 
 .container {
   @include clearfix;
+  @include box-sizing(border-box);
   margin: 0 auto 0;
   padding: 0px 30px;
   max-width: grid-width(12);
@@ -225,7 +235,7 @@ mark {
 .help-tab {
   @include transform(rotate(-90deg));
   @include transform-origin(0 0);
-  top: 50%;
+  top: 250px;
   left: 0;
   position: fixed;
   z-index: 99;
@@ -244,7 +254,7 @@ mark {
 
     &:hover, &:focus {
       color: #fff;
-      background: #1D9DD9;
+      background: $link-color;
     }
   }
 }
@@ -273,13 +283,24 @@ mark {
 
     &:hover, &:focus {
       color: #fff;
-      background: #1D9DD9;
+      background: $link-color;
     }
   }
 }
 
-#feedback_form textarea[name="details"] {
-  height: 150px;
+#feedback_form {
+  input, textarea {
+    font: normal 1em/1.4em $sans-serif;
+  }
+  textarea[name="details"] {
+    height: 150px;
+  }
+}
+
+#feedback_success_wrapper {
+  p {
+    padding: 0 20px 20px 20px;
+  }
 }
 
 // ====================
@@ -287,6 +308,16 @@ mark {
 // UI - disabled state
 .is-disabled {
   @extend %ui-disabled;
+}
+
+// UI - is hidden
+.is-hidden {
+  display: none;
+}
+
+// UI - is deprecated
+.is-deprecated {
+  @extend %ui-deprecated;
 }
 
 // UI - semantically hide text

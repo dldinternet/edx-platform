@@ -1,11 +1,14 @@
 <%inherit file="base.html" />
+<%def name="online_help_token()"><% return "schedule" %></%def>
 <%block name="title">${_("Schedule &amp; Details Settings")}</%block>
 <%block name="bodyclass">is-signedin course schedule view-settings feature-upload</%block>
 
 <%namespace name='static' file='static_content.html'/>
 <%!
   from django.utils.translation import ugettext as _
-  from xmodule.modulestore.django import loc_mapper
+  from contentstore import utils
+  from contentstore.views.course import should_show_group_configurations_page
+  import urllib
 %>
 
 <%block name="header_extras">
@@ -23,29 +26,12 @@
 window.CMS = window.CMS || {};
 CMS.URL = CMS.URL || {};
 CMS.URL.UPLOAD_ASSET = '${upload_asset_url}';
-
-require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/settings/main"],
-  function(doc, $, CourseDetailsModel, MainView) {
-    // highlighting labels when fields are focused in
-    $("form :input").focus(function() {
-      $("label[for='" + this.id + "']").addClass("is-focused");
-    }).blur(function() {
-      $("label").removeClass("is-focused");
-      });
-    var model = new CourseDetailsModel();
-    model.urlRoot = '${details_url}';
-    model.fetch({
-      success: function(model) {
-        var editor = new MainView({
-            el: $('.settings-details'),
-            model: model
-        });
-        editor.render();
-      },
-      reset: true
-    });
-});
   </script>
+</%block>
+<%block name="requirejs">
+    require(["js/factories/settings"], function(SettingsFactory) {
+        SettingsFactory("${details_url}");
+    });
 </%block>
 
 <%block name="content">
@@ -82,7 +68,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
             </li>
 
             <li class="field text is-not-editable" id="field-course-name">
-              <label for="course-name">${_("Course Name")}</label>
+              <label for="course-name">${_("Course Run")}</label>
               <input title="${_('This field is disabled: this information cannot be changed.')}" type="text"
                 class="long" id="course-name" readonly />
             </li>
@@ -92,13 +78,26 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
           <div class="note note-promotion note-promotion-courseURL has-actions">
             <h3 class="title">${_("Course Summary Page")} <span class="tip">${_("(for student enrollment and access)")}</span></h3>
             <div class="copy">
-              <p><a class="link-courseURL" rel="external" href="https:${lms_link_for_about_page}">https:${lms_link_for_about_page}</a></p>
+              <%
+                link_for_about_page = ("https:" if is_secure else "http:") + lms_link_for_about_page
+              %>
+              <p><a class="link-courseURL" rel="external" href="${link_for_about_page}">${link_for_about_page}</a></p>
             </div>
 
             <ul class="list-actions">
               <li class="action-item">
+                <%
+                  email_subject = urllib.quote(_("Enroll in {course_display_name}").format(
+                      course_display_name = context_course.display_name_with_default
+                  ).encode("utf-8"))
+                  email_body = urllib.quote(_('The course "{course_display_name}", provided by {platform_name}, is open for enrollment. Please navigate to this course at {link_for_about_page} to enroll.').format(
+                      course_display_name = context_course.display_name_with_default,
+                      platform_name = settings.PLATFORM_NAME,
+                      link_for_about_page = link_for_about_page
+                  ).encode("utf-8"))
+                %>
                 <a title="${_('Send a note to students via email')}"
-                    href="mailto:someone@domain.com?Subject=Enroll%20in%20${context_course.display_name_with_default}&body=The%20course%20&quot;${context_course.display_name_with_default}&quot;,%20provided%20by%20edX,%20is%20open%20for%20enrollment.%20Please%20navigate%20to%20this%20course%20at%20https:${lms_link_for_about_page}%20to%20enroll." class="action action-primary">
+                    href="mailto:someone@domain.com?Subject=${email_subject}&body=${email_body}" class="action action-primary">
                     <i class="icon-envelope-alt icon-inline"></i>${_("Invite your students")}</a>
               </li>
             </ul>
@@ -109,10 +108,17 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
           <div class="notice notice-incontext notice-workflow">
             <h3 class="title">${_("Promoting Your Course with edX")}</h3>
             <div class="copy">
-              <p>${_('Your course summary page will not be viewable until your '
-                      'course has been announced. To provide content for the '
-                      'page and preview it, follow the instructions provided '
-                      'by your <abbr title="Program Manager">PM</abbr>.')}</p>
+              <p>${_(
+                'Your course summary page will not be viewable until your course '
+                'has been announced. To provide content for the page and preview '
+                'it, follow the instructions provided by your {manager}.').format(
+                  manager='<abbr title="{program_manager}">{pm}</abbr>'.format(
+                    ## Translators: This is a job title
+                    program_manager=_("Program Manager"),
+                    ## Translators: This is an abbreviation for "Program Manager", which is a job title
+                    pm=_("PM"),
+                  )
+              )}</p>
             </div>
           </div>
           % endif
@@ -137,7 +143,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
               <div class="field time" id="field-course-start-time">
                 <label for="course-start-time">${_("Course Start Time")}</label>
                 <input type="text" class="time start timepicker" id="course-start-time" value="" placeholder="HH:MM" autocomplete="off" />
-                <span class="tip tip-stacked" id="timezone"></span>
+                <span class="tip tip-stacked timezone">${_("(UTC)")}</span>
               </div>
             </li>
 
@@ -151,7 +157,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
               <div class="field time" id="field-course-end-time">
                 <label for="course-end-time">${_("Course End Time")}</label>
                 <input type="text" class="time end" id="course-end-time" value="" placeholder="HH:MM" autocomplete="off" />
-                <span class="tip tip-stacked" id="timezone"></span>
+                <span class="tip tip-stacked timezone">${_("(UTC)")}</span>
               </div>
             </li>
           </ol>
@@ -167,7 +173,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
               <div class="field time" id="field-enrollment-start-time">
                 <label for="course-enrollment-start-time">${_("Enrollment Start Time")}</label>
                 <input type="text" class="time start" id="course-enrollment-start-time" value="" placeholder="HH:MM" autocomplete="off" />
-                <span class="tip tip-stacked" id="timezone"></span>
+                <span class="tip tip-stacked timezone">${_("(UTC)")}</span>
               </div>
             </li>
 
@@ -181,7 +187,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
               <div class="field time" id="field-enrollment-end-time">
                 <label for="course-enrollment-end-time">${_("Enrollment End Time")}</label>
                 <input type="text" class="time end" id="course-enrollment-end-time" value="" placeholder="HH:MM" autocomplete="off" />
-                <span class="tip tip-stacked" id="timezone"></span>
+                <span class="tip tip-stacked timezone">${_("(UTC)")}</span>
               </div>
             </li>
           </ol>
@@ -190,7 +196,18 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
           <div class="notice notice-incontext notice-workflow">
             <h3 class="title">${_("These Dates Are Not Used When Promoting Your Course")}</h3>
             <div class="copy">
-              <p>${_('These dates impact <strong>when your courseware can be viewed</strong>, but they are <strong>not the dates shown on your course summary page</strong>.  To provide the course start and registration dates as shown on your course summary page, follow the instructions provided by your <abbr title="Program Manager">PM</abbr> or Conrad Warre <a rel="email" class="action action-email" href="mailto:conrad@edx.org">(conrad@edx.org)</a>.')}</p>
+              <p>${_(
+                'These dates impact <strong>when your courseware can be viewed</strong>, '
+                'but they are <strong>not the dates shown on your course summary page</strong>. '
+                'To provide the course start and registration dates as shown on your course '
+                'summary page, follow the instructions provided by your {manager}.').format(
+                  manager='<abbr title="{program_manager}">{pm}</abbr>'.format(
+                    ## Translators: This is a job title
+                    program_manager=_("Program Manager"),
+                    ## Translators: This is an abbreviation for "Program Manager", which is a job title
+                    pm=_("PM"),
+                  )
+              )}</p>
             </div>
           </div>
           % endif
@@ -246,7 +263,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
 
                   <div class="wrapper-input">
                     <div class="input">
-                      <input type="text" class="long new-course-image-url" id="course-image-url" value="" placeholder="Your course image URL" autocomplete="off" />
+                      <input type="text" dir="ltr" class="long new-course-image-url" id="course-image-url" value="" placeholder="Your course image URL" autocomplete="off" />
                       <span class="tip tip-stacked">${_("Please provide a valid path and name to your course image (Note: only JPEG or PNG format supported)")}</span>
                     </div>
                     <button type="button" class="action action-upload-image">${_("Upload Course Image")}</button>
@@ -266,7 +283,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
                   </div>
 
                   <div class="input">
-                    <input type="text" class="long new-course-introduction-video add-video-data" id="course-introduction-video" value="" placeholder="your YouTube video's ID" autocomplete="off" />
+                    <input type="text"  dir="ltr" class="long new-course-introduction-video add-video-data" id="course-introduction-video" value="" placeholder="your YouTube video's ID" autocomplete="off" />
                     <span class="tip tip-stacked">${_("Enter your YouTube video's ID (along with any restriction parameters)")}</span>
                   </div>
                 </li>
@@ -294,7 +311,7 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
           % endif
       </form>
     </article>
-    <aside class="content-supplementary" role="complimentary">
+    <aside class="content-supplementary" role="complementary">
      <div class="bit">
         <h3 class="title-3">${_("How are these settings used?")}</h3>
         <p>${_("Your course's schedule determines when students can enroll in and begin a course.")}</p>
@@ -305,15 +322,18 @@ require(["domReady!", "jquery", "js/models/settings/course_details", "js/views/s
      <div class="bit">
      % if context_course:
           <%
-            course_team_url = course_locator.url_reverse('course_team/', '')
-            grading_config_url = course_locator.url_reverse('settings/grading/')
-            advanced_config_url = course_locator.url_reverse('settings/advanced/')
+            course_team_url = utils.reverse_course_url('course_team_handler', context_course.id)
+            grading_config_url = utils.reverse_course_url('grading_handler', context_course.id)
+            advanced_config_url = utils.reverse_course_url('advanced_settings_handler', context_course.id)
           %>
         <h3 class="title-3">${_("Other Course Settings")}</h3>
         <nav class="nav-related">
           <ul>
             <li class="nav-item"><a href="${grading_config_url}">${_("Grading")}</a></li>
             <li class="nav-item"><a href="${course_team_url}">${_("Course Team")}</a></li>
+            % if should_show_group_configurations_page(context_course):
+              <li class="nav-item"><a href="${utils.reverse_course_url('group_configurations_list_handler', context_course.id)}">${_("Group Configurations")}</a></li>
+            % endif
             <li class="nav-item"><a href="${advanced_config_url}">${_("Advanced Settings")}</a></li>
           </ul>
         </nav>

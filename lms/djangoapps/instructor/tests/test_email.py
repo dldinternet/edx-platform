@@ -4,23 +4,20 @@ Additionally tests that bulk email is always disabled for
 non-Mongo backed courses, regardless of email feature flag, and
 that the view is conditionally available when Course Auth is turned on.
 """
-
-from django.test.utils import override_settings
 from django.conf import settings
 from django.core.urlresolvers import reverse
+from django.test.utils import override_settings
+from mock import patch
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 
-from courseware.tests.tests import TEST_DATA_MONGO_MODULESTORE
+from bulk_email.models import CourseAuthorization
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
 from student.tests.factories import AdminFactory
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
-
-from mock import patch
-
-from bulk_email.models import CourseAuthorization
 
 
-@override_settings(MODULESTORE=TEST_DATA_MONGO_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestNewInstructorDashboardEmailViewMongoBacked(ModuleStoreTestCase):
     """
     Check for email view on the new instructor dashboard
@@ -34,7 +31,7 @@ class TestNewInstructorDashboardEmailViewMongoBacked(ModuleStoreTestCase):
         self.client.login(username=instructor.username, password="test")
 
         # URL for instructor dash
-        self.url = reverse('instructor_dashboard_2', kwargs={'course_id': self.course.id})
+        self.url = reverse('instructor_dashboard', kwargs={'course_id': self.course.id.to_deprecated_string()})
         # URL for email view
         self.email_link = '<a href="" data-section="send_email">Email</a>'
 
@@ -109,20 +106,20 @@ class TestNewInstructorDashboardEmailViewMongoBacked(ModuleStoreTestCase):
         self.assertFalse(self.email_link in response.content)
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestNewInstructorDashboardEmailViewXMLBacked(ModuleStoreTestCase):
     """
     Check for email view on the new instructor dashboard
     """
     def setUp(self):
-        self.course_name = 'edX/toy/2012_Fall'
+        self.course_key = SlashSeparatedCourseKey('edX', 'toy', '2012_Fall')
 
         # Create instructor account
         instructor = AdminFactory.create()
         self.client.login(username=instructor.username, password="test")
 
         # URL for instructor dash
-        self.url = reverse('instructor_dashboard_2', kwargs={'course_id': self.course_name})
+        self.url = reverse('instructor_dashboard', kwargs={'course_id': self.course_key.to_deprecated_string()})
         # URL for email view
         self.email_link = '<a href="" data-section="send_email">Email</a>'
 

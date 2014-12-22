@@ -1,5 +1,6 @@
 import json
 import logging
+import warnings
 
 from lxml import etree
 
@@ -11,7 +12,7 @@ from .exceptions import NotFoundError
 from .fields import Date
 from .mako_module import MakoModuleDescriptor
 from .progress import Progress
-from .x_module import XModule
+from .x_module import XModule, STUDENT_VIEW
 from .xml_module import XmlDescriptor
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,9 @@ log = logging.getLogger(__name__)
 # OBSOLETE: This obsoletes 'type'
 class_priority = ['video', 'problem']
 
+# Make '_' a no-op so we can scrape strings
+_ = lambda text: text
+
 
 class SequenceFields(object):
     has_children = True
@@ -27,7 +31,11 @@ class SequenceFields(object):
     # NOTE: Position is 1-indexed.  This is silly, but there are now student
     # positions saved on prod, so it's not easy to fix.
     position = Integer(help="Last tab viewed in this sequence", scope=Scope.user_state)
-    due = Date(help="Date that this problem is due by", scope=Scope.settings)
+    due = Date(
+        display_name=_("Due Date"),
+        help=_("Enter the date by which problems are due."),
+        scope=Scope.settings,
+    )
     extended_due = Date(
         help="Date that this problem is due by for a particular student. This "
              "can be set by an instructor, and will override the global due "
@@ -41,19 +49,31 @@ class SequenceFields(object):
 class SequenceModule(SequenceFields, XModule):
     ''' Layout module which lays out content in a temporal sequence
     '''
-    js = {'coffee': [resource_string(__name__,
-                                     'js/src/sequence/display.coffee')],
-          'js': [resource_string(__name__, 'js/src/sequence/display/jquery.sequence.js')]}
-    css = {'scss': [resource_string(__name__, 'css/sequence/display.scss')]}
+    js = {
+        'coffee': [resource_string(__name__, 'js/src/sequence/display.coffee')],
+        'js': [resource_string(__name__, 'js/src/sequence/display/jquery.sequence.js')],
+    }
+    css = {
+        'scss': [resource_string(__name__, 'css/sequence/display.scss')],
+    }
     js_module_name = "Sequence"
-
 
     def __init__(self, *args, **kwargs):
         super(SequenceModule, self).__init__(*args, **kwargs)
 
-        # if position is specified in system, then use that instead
-        if getattr(self.system, 'position', None) is not None:
-            self.position = int(self.system.position)
+        # If position is specified in system, then use that instead.
+        position = getattr(self.system, 'position', None)
+        if position is not None:
+            try:
+                self.position = int(self.system.position)
+            except (ValueError, TypeError):
+                # Check for https://openedx.atlassian.net/browse/LMS-6496
+                warnings.warn(
+                    "Sequential position cannot be converted to an integer: {pos!r}".format(
+                        pos=self.system.position,
+                    ),
+                    RuntimeWarning,
+                )
 
     def get_progress(self):
         ''' Return the total progress, adding total done and total available.
@@ -68,7 +88,13 @@ class SequenceModule(SequenceFields, XModule):
     def handle_ajax(self, dispatch, data):  # TODO: bounds checking
         ''' get = request.POST instance '''
         if dispatch == 'goto_position':
-            self.position = int(data['position'])
+            # set position to default value if either 'position' argument not
+            # found in request or it is a non-positive integer
+            position = data.get('position', u'1')
+            if position.isdigit() and int(position) > 0:
+                self.position = int(position)
+            else:
+                self.position = 1
             return json.dumps({'success': True})
         raise NotFoundError('Unexpected dispatch type')
 
@@ -85,7 +111,7 @@ class SequenceModule(SequenceFields, XModule):
 
         for child in self.get_display_items():
             progress = child.get_progress()
-            rendered_child = child.render('student_view', context)
+            rendered_child = child.render(STUDENT_VIEW, context)
             fragment.add_frag_resources(rendered_child)
 
             titles = child.get_content_titles()
@@ -96,7 +122,7 @@ class SequenceModule(SequenceFields, XModule):
                 'progress_status': Progress.to_js_status_str(progress),
                 'progress_detail': Progress.to_js_detail_str(progress),
                 'type': child.get_icon_class(),
-                'id': child.id,
+                'id': child.scope_ids.usage_id.to_deprecated_string(),
             }
             if childinfo['title'] == '':
                 childinfo['title'] = child.display_name_with_default
@@ -104,7 +130,7 @@ class SequenceModule(SequenceFields, XModule):
 
         params = {'items': contents,
                   'element_id': self.location.html_id(),
-                  'item_id': self.id,
+                  'item_id': self.location.to_deprecated_string(),
                   'position': self.position,
                   'tag': self.location.category,
                   'ajax_url': self.system.ajax_url,
@@ -128,7 +154,9 @@ class SequenceDescriptor(SequenceFields, MakoModuleDescriptor, XmlDescriptor):
     mako_template = 'widgets/sequence-edit.html'
     module_class = SequenceModule
 
-    js = {'coffee': [resource_string(__name__, 'js/src/sequence/edit.coffee')]}
+    js = {
+        'coffee': [resource_string(__name__, 'js/src/sequence/edit.coffee')],
+    }
     js_module_name = "SequenceDescriptor"
 
     @classmethod

@@ -1,24 +1,25 @@
 """
 Unit tests for course import and export
 """
+import copy
+import json
+import logging
 import os
 import shutil
 import tarfile
 import tempfile
-import copy
 from path import path
-import json
-import logging
 from uuid import uuid4
-from pymongo import MongoClient
 
-from contentstore.tests.utils import CourseTestCase
 from django.test.utils import override_settings
 from django.conf import settings
-from xmodule.modulestore.django import loc_mapper
+from contentstore.utils import reverse_course_url
 
-from xmodule.contentstore.django import _CONTENTSTORE
 from xmodule.modulestore.tests.factories import ItemFactory
+
+from contentstore.tests.utils import CourseTestCase
+from student import auth
+from student.roles import CourseInstructorRole, CourseStaffRole
 
 TEST_DATA_CONTENTSTORE = copy.deepcopy(settings.CONTENTSTORE)
 TEST_DATA_CONTENTSTORE['DOC_STORE_CONFIG']['db'] = 'test_xcontent_%s' % uuid4().hex
@@ -33,10 +34,7 @@ class ImportTestCase(CourseTestCase):
     """
     def setUp(self):
         super(ImportTestCase, self).setUp()
-        self.new_location = loc_mapper().translate_location(
-            self.course.location.course_id, self.course.location, False, True
-        )
-        self.url = self.new_location.url_reverse('import/', '')
+        self.url = reverse_course_url('import_handler', self.course.id)
         self.content_dir = path(tempfile.mkdtemp())
 
         def touch(name):
@@ -47,11 +45,13 @@ class ImportTestCase(CourseTestCase):
         # Create tar test files -----------------------------------------------
         # OK course:
         good_dir = tempfile.mkdtemp(dir=self.content_dir)
-        os.makedirs(os.path.join(good_dir, "course"))
-        with open(os.path.join(good_dir, "course.xml"), "w+") as f:
+        # test course being deeper down than top of tar file
+        embedded_dir = os.path.join(good_dir, "grandparent", "parent")
+        os.makedirs(os.path.join(embedded_dir, "course"))
+        with open(os.path.join(embedded_dir, "course.xml"), "w+") as f:
             f.write('<course url_name="2013_Spring" org="EDx" course="0.00x"/>')
 
-        with open(os.path.join(good_dir, "course", "2013_Spring.xml"), "w+") as f:
+        with open(os.path.join(embedded_dir, "course", "2013_Spring.xml"), "w+") as f:
             f.write('<course></course>')
 
         self.good_tar = os.path.join(self.content_dir, "good.tar.gz")
@@ -69,8 +69,6 @@ class ImportTestCase(CourseTestCase):
 
     def tearDown(self):
         shutil.rmtree(self.content_dir)
-        MongoClient().drop_database(TEST_DATA_CONTENTSTORE['DOC_STORE_CONFIG']['db'])
-        _CONTENTSTORE.clear()
 
     def test_no_coursexml(self):
         """
@@ -88,13 +86,14 @@ class ImportTestCase(CourseTestCase):
         # Check that `import_status` returns the appropriate stage (i.e., the
         # stage at which import failed).
         resp_status = self.client.get(
-            self.new_location.url_reverse(
-                'import_status',
-                os.path.split(self.bad_tar)[1]
+            reverse_course_url(
+                'import_status_handler',
+                self.course.id,
+                kwargs={'filename': os.path.split(self.bad_tar)[1]}
             )
         )
 
-        self.assertEquals(json.loads(resp_status.content)["ImportStatus"], 2)
+        self.assertEquals(json.loads(resp_status.content)["ImportStatus"], -2)
 
     def test_with_coursexml(self):
         """
@@ -106,6 +105,46 @@ class ImportTestCase(CourseTestCase):
             resp = self.client.post(self.url, args)
 
         self.assertEquals(resp.status_code, 200)
+
+    def test_import_in_existing_course(self):
+        """
+        Check that course is imported successfully in existing course and users have their access roles
+        """
+        # Create a non_staff user and add it to course staff only
+        __, nonstaff_user = self.create_non_staff_authed_user_client(authenticate=False)
+        auth.add_users(self.user, CourseStaffRole(self.course.id), nonstaff_user)
+
+        course = self.store.get_course(self.course.id)
+        self.assertIsNotNone(course)
+        display_name_before_import = course.display_name
+
+        # Check that global staff user can import course
+        with open(self.good_tar) as gtar:
+            args = {"name": self.good_tar, "course-data": [gtar]}
+            resp = self.client.post(self.url, args)
+        self.assertEquals(resp.status_code, 200)
+
+        course = self.store.get_course(self.course.id)
+        self.assertIsNotNone(course)
+        display_name_after_import = course.display_name
+
+        # Check that course display name have changed after import
+        self.assertNotEqual(display_name_before_import, display_name_after_import)
+
+        # Now check that non_staff user has his same role
+        self.assertFalse(CourseInstructorRole(self.course.id).has_user(nonstaff_user))
+        self.assertTrue(CourseStaffRole(self.course.id).has_user(nonstaff_user))
+
+        # Now course staff user can also successfully import course
+        self.client.login(username=nonstaff_user.username, password='foo')
+        with open(self.good_tar) as gtar:
+            args = {"name": self.good_tar, "course-data": [gtar]}
+            resp = self.client.post(self.url, args)
+        self.assertEquals(resp.status_code, 200)
+
+        # Now check that non_staff user has his same role
+        self.assertFalse(CourseInstructorRole(self.course.id).has_user(nonstaff_user))
+        self.assertTrue(CourseStaffRole(self.course.id).has_user(nonstaff_user))
 
     ## Unsafe tar methods #####################################################
     # Each of these methods creates a tarfile with a single type of unsafe
@@ -178,6 +217,7 @@ class ImportTestCase(CourseTestCase):
         """
 
         def try_tar(tarpath):
+            """ Attempt to tar an unacceptable file """
             with open(tarpath) as tar:
                 args = {"name": tarpath, "course-data": [tar]}
                 resp = self.client.post(self.url, args)
@@ -192,9 +232,10 @@ class ImportTestCase(CourseTestCase):
         # either 3, indicating all previous steps are completed, or 0,
         # indicating no upload in progress)
         resp_status = self.client.get(
-            self.new_location.url_reverse(
-                'import_status',
-                os.path.split(self.good_tar)[1]
+            reverse_course_url(
+                'import_status_handler',
+                self.course.id,
+                kwargs={'filename': os.path.split(self.good_tar)[1]}
             )
         )
         import_status = json.loads(resp_status.content)["ImportStatus"]
@@ -211,8 +252,7 @@ class ExportTestCase(CourseTestCase):
         Sets up the test course.
         """
         super(ExportTestCase, self).setUp()
-        location = loc_mapper().translate_location(self.course.location.course_id, self.course.location, False, True)
-        self.url = location.url_reverse('export/', '')
+        self.url = reverse_course_url('export_handler', self.course.id)
 
     def test_export_html(self):
         """
@@ -252,8 +292,9 @@ class ExportTestCase(CourseTestCase):
         """
         Export failure.
         """
-        ItemFactory.create(parent_location=self.course.location, category='aawefawef')
-        self._verify_export_failure('/course/MITx.999.Robot_Super_Course/branch/draft/block/Robot_Super_Course')
+        fake_xblock = ItemFactory.create(parent_location=self.course.location, category='aawefawef')
+        self.store.publish(fake_xblock.location, self.user.id)
+        self._verify_export_failure(u'/container/{}'.format(self.course.location))
 
     def test_export_failure_subsection_level(self):
         """
@@ -264,12 +305,13 @@ class ExportTestCase(CourseTestCase):
             parent_location=vertical.location,
             category='aawefawef'
         )
-        self._verify_export_failure(u'/unit/MITx.999.Robot_Super_Course/branch/draft/block/foo')
 
-    def _verify_export_failure(self, expectedText):
+        self._verify_export_failure(u'/container/{}'.format(vertical.location))
+
+    def _verify_export_failure(self, expected_text):
         """ Export failure helper method. """
         resp = self.client.get(self.url, HTTP_ACCEPT='application/x-tgz')
         self.assertEquals(resp.status_code, 200)
         self.assertIsNone(resp.get('Content-Disposition'))
         self.assertContains(resp, 'Unable to create xml for module')
-        self.assertContains(resp, expectedText)
+        self.assertContains(resp, expected_text)

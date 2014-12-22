@@ -1,9 +1,9 @@
-$gray: rgb(127, 127, 127);
-$blue: rgb(0, 159, 230);
-$gray-d1: shade($gray,20%);
-$gray-l2: tint($gray,40%);
-$gray-l3: tint($gray,60%);
-$blue-s1: saturate($blue,15%);
+$a11y--gray: rgb(127, 127, 127);
+$a11y--blue: rgb(0, 159, 230);
+$a11y--gray-d1: shade($gray,20%);
+$a11y--gray-l2: tint($gray,40%);
+$a11y--gray-l3: tint($gray,60%);
+$a11y--blue-s1: saturate($blue,15%);
 
 %use-font-awesome {
   font-family: FontAwesome;
@@ -44,18 +44,18 @@ $blue-s1: saturate($blue,15%);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        color: $gray-l2;
+        color: $a11y--gray-l2;
         font-size: 14px;
         line-height: 23px;
 
         &:hover, &:focus {
-          color: $gray-d1;
+          color: $a11y--gray-d1;
         }
       }
 
       &.active{
         a {
-          color: $blue;
+          color: $a11y--blue;
         }
       }
 
@@ -96,7 +96,7 @@ $blue-s1: saturate($blue,15%);
       border-radius: 0 3px 3px 0;
       background-color: $very-light-text;
       padding: ($baseline*.75 $baseline*1.25 $baseline*.75 $baseline*.75);
-      color: $gray-l2;
+      color: $a11y--gray-l2;
       min-width: 1.5em;
       line-height: 14px;
       text-align: center;
@@ -130,4 +130,97 @@ $blue-s1: saturate($blue,15%);
       }
     }
   }
+}
+
+
+.contextmenu, .submenu {
+  border: 1px solid #333;
+  background: #fff;
+  color: #333;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  position: absolute;
+  top: 0;
+  display: none;
+  z-index: 999999;
+  outline: none;
+  cursor: default;
+  white-space: nowrap;
+
+  &.is-opened {
+     display: block;
+  }
+
+  .menu-item, .submenu-item {
+    border-top: 1px solid #ccc;
+    padding: 5px 10px;
+    outline: none;
+
+    & > span {
+        color: #333;
+      }
+
+    &:first-child {
+      border-top: none;
+    }
+
+    &:focus {
+      background: #333;
+      color: #fff;
+
+      & > span {
+        color: #fff;
+      }
+    }
+  }
+
+  .submenu-item {
+    position: relative;
+    padding: 5px 20px 5px 10px;
+
+    &:after {
+      content: '\25B6';
+      position: absolute;
+      right: 5px;
+      line-height: 25px;
+      font-size: 10px;
+    }
+
+    .submenu {
+      display: none;
+    }
+
+    &.is-opened {
+      background: #333;
+      color: #fff;
+
+      & > span {
+        color: #fff;
+      }
+
+      & > .submenu {
+        display: block;
+      }
+    }
+
+    .is-selected {
+      font-weight: bold;
+    }
+  }
+
+  .is-disabled {
+    pointer-events: none;
+    color: #ccc;
+  }
+}
+
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 900000;
+  background-color: transparent;
 }

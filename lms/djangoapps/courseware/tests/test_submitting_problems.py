@@ -2,42 +2,38 @@
 """
 Integration tests for submitting problem responses and getting grades.
 """
-# text processing dependencies
 import json
 import os
 from textwrap import dedent
 
-from mock import patch
-
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.test.client import RequestFactory
 from django.core.urlresolvers import reverse
+from django.test.client import RequestFactory
 from django.test.utils import override_settings
+from mock import patch
 
-# Need access to internal func to put users in the right group
-from courseware import grades
-from courseware.models import StudentModule
-
-from xmodule.modulestore.django import modulestore, editable_modulestore
-
-#import factories and parent testcase modules
-from xmodule.modulestore.tests.factories import CourseFactory, ItemFactory
-from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from capa.tests.response_xml_factory import (
     OptionResponseXMLFactory, CustomResponseXMLFactory, SchematicResponseXMLFactory,
     CodeResponseXMLFactory,
 )
+from courseware import grades
+from courseware.models import StudentModule
 from courseware.tests.helpers import LoginEnrollmentTestCase
-from courseware.tests.modulestore_config import TEST_DATA_MIXED_MODULESTORE
-from lms.lib.xblock.runtime import quote_slashes
+from xmodule.modulestore.tests.django_utils import TEST_DATA_MOCK_MODULESTORE
+from lms.djangoapps.lms_xblock.runtime import quote_slashes
 from student.tests.factories import UserFactory
+from student.models import anonymous_id_for_user
+from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
+from xmodule.modulestore.tests.factories import CourseFactory, ItemFactory
+from xmodule.partitions.partitions import Group, UserPartition
+from openedx.core.djangoapps.user_api.tests.factories import UserCourseTagFactory
 
 
-@override_settings(MODULESTORE=TEST_DATA_MIXED_MODULESTORE)
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestSubmittingProblems(ModuleStoreTestCase, LoginEnrollmentTestCase):
     """
-        Check that a course gets graded properly.
+    Check that a course gets graded properly.
     """
 
     # arbitrary constant
@@ -46,6 +42,7 @@ class TestSubmittingProblems(ModuleStoreTestCase, LoginEnrollmentTestCase):
 
     def setUp(self):
 
+        super(TestSubmittingProblems, self).setUp(create_user=False)
         # Create course
         self.course = CourseFactory.create(display_name=self.COURSE_NAME, number=self.COURSE_SLUG)
         assert self.course, "Couldn't load course %r" % self.COURSE_NAME
@@ -63,14 +60,14 @@ class TestSubmittingProblems(ModuleStoreTestCase, LoginEnrollmentTestCase):
         """
         Re-fetch the course from the database so that the object being dealt with has everything added to it.
         """
-        self.course = modulestore().get_instance(self.course.id, self.course.location)
+        self.course = self.store.get_course(self.course.id)
 
     def problem_location(self, problem_url_name):
         """
         Returns the url of the problem given the problem's name
         """
 
-        return "i4x://" + self.course.org + "/{}/problem/{}".format(self.COURSE_SLUG, problem_url_name)
+        return self.course.id.make_usage_key('problem', problem_url_name)
 
     def modx_url(self, problem_location, dispatch):
         """
@@ -84,8 +81,8 @@ class TestSubmittingProblems(ModuleStoreTestCase, LoginEnrollmentTestCase):
         return reverse(
             'xblock_handler',
             kwargs={
-                'course_id': self.course.id,
-                'usage_id': quote_slashes(problem_location),
+                'course_id': self.course.id.to_deprecated_string(),
+                'usage_id': quote_slashes(problem_location.to_deprecated_string()),
                 'handler': 'xmodule_handler',
                 'suffix': dispatch,
             }
@@ -102,7 +99,7 @@ class TestSubmittingProblems(ModuleStoreTestCase, LoginEnrollmentTestCase):
         problem_location = self.problem_location(problem_url_name)
         modx_url = self.modx_url(problem_location, 'problem_check')
 
-        answer_key_prefix = 'input_i4x-' + self.course.org + '-{}-problem-{}_'.format(self.COURSE_SLUG, problem_url_name)
+        answer_key_prefix = 'input_{}_'.format(problem_location.html_id())
 
         # format the response dictionary to be sent in the post request by adding the above prefix to each key
         response_dict = {(answer_key_prefix + k): v for k, v in responses.items()}
@@ -217,20 +214,13 @@ class TestSubmittingProblems(ModuleStoreTestCase, LoginEnrollmentTestCase):
         self.refresh_course()
         return section
 
-
-class TestCourseGrader(TestSubmittingProblems):
-    """
-    Suite of tests for the course grader.
-    """
-
     def add_grading_policy(self, grading_policy):
         """
         Add a grading policy to the course.
         """
 
         self.course.grading_policy = grading_policy
-        store = editable_modulestore()
-        store.update_item(self.course, '**replace_user**')
+        self.update_course(self.course, self.student_user.id)
         self.refresh_course()
 
     def get_grade_summary(self):
@@ -247,7 +237,7 @@ class TestCourseGrader(TestSubmittingProblems):
         """
 
         fake_request = self.factory.get(
-            reverse('progress', kwargs={'course_id': self.course.id})
+            reverse('progress', kwargs={'course_id': self.course.id.to_deprecated_string()})
         )
 
         return grades.grade(self.student_user, fake_request, self.course)
@@ -265,7 +255,7 @@ class TestCourseGrader(TestSubmittingProblems):
         """
 
         fake_request = self.factory.get(
-            reverse('progress', kwargs={'course_id': self.course.id})
+            reverse('progress', kwargs={'course_id': self.course.id.to_deprecated_string()})
         )
 
         progress_summary = grades.progress_summary(
@@ -284,7 +274,7 @@ class TestCourseGrader(TestSubmittingProblems):
         """
         Global scores, each Score is a Problem Set.
 
-        Returns list of scores: [<points on hw_1>, <poinst on hw_2>, ..., <poinst on hw_n>]
+        Returns list of scores: [<points on hw_1>, <points on hw_2>, ..., <points on hw_n>]
         """
         return [s.earned for s in self.get_grade_summary()['totaled_scores']['Homework']]
 
@@ -293,7 +283,7 @@ class TestCourseGrader(TestSubmittingProblems):
         Returns list of scores for a given url.
 
         Returns list of scores for the given homework:
-            [<points on problem_1>, <poinst on problem_2>, ..., <poinst on problem_n>]
+            [<points on problem_1>, <points on problem_2>, ..., <points on problem_n>]
         """
 
         # list of grade summaries for each section
@@ -305,6 +295,11 @@ class TestCourseGrader(TestSubmittingProblems):
         hw_section = next(section for section in sections_list if section.get('url_name') == hw_url_name)
         return [s.earned for s in hw_section['scores']]
 
+
+class TestCourseGrader(TestSubmittingProblems):
+    """
+    Suite of tests for the course grader.
+    """
     def basic_setup(self, late=False, reset=False, showanswer=False):
         """
         Set up a simple course for testing basic grading functionality.
@@ -319,8 +314,8 @@ class TestCourseGrader(TestSubmittingProblems):
                 "weight": 1.0
             }],
             "GRADE_CUTOFFS": {
-            'A': .9,
-            'B': .33
+                'A': .9,
+                'B': .33
             }
         }
         self.add_grading_policy(grading_policy)
@@ -338,18 +333,20 @@ class TestCourseGrader(TestSubmittingProblems):
         """
 
         grading_policy = {
-            "GRADER": [{
-                "type": "Homework",
-                "min_count": 1,
-                "drop_count": 0,
-                "short_label": "HW",
-                "weight": 0.25
-            }, {
-                "type": "Final",
-                "name": "Final Section",
-                "short_label": "Final",
-                "weight": 0.75
-            }]
+            "GRADER": [
+                {
+                    "type": "Homework",
+                    "min_count": 1,
+                    "drop_count": 0,
+                    "short_label": "HW",
+                    "weight": 0.25
+                }, {
+                    "type": "Final",
+                    "name": "Final Section",
+                    "short_label": "Final",
+                    "weight": 0.75
+                }
+            ]
         }
         self.add_grading_policy(grading_policy)
 
@@ -366,13 +363,14 @@ class TestCourseGrader(TestSubmittingProblems):
 
         grading_policy = {
             "GRADER": [
-            {
-                "type": "Homework",
-                "min_count": 3,
-                "drop_count": 1,
-                "short_label": "HW",
-                "weight": 1
-            }]
+                {
+                    "type": "Homework",
+                    "min_count": 3,
+                    "drop_count": 1,
+                    "short_label": "HW",
+                    "weight": 1
+                }
+            ]
         }
         self.add_grading_policy(grading_policy)
 
@@ -493,7 +491,7 @@ class TestCourseGrader(TestSubmittingProblems):
         # score read from StudentModule and our student gets an A instead.
         with patch('submissions.api.get_scores') as mock_get_scores:
             mock_get_scores.return_value = {
-                self.problem_location('p3'): (1, 1)
+                self.problem_location('p3').to_deprecated_string(): (1, 1)
             }
             self.check_grade_percent(1.0)
             self.assertEqual(self.get_grade_summary()['grade'], 'A')
@@ -509,12 +507,15 @@ class TestCourseGrader(TestSubmittingProblems):
 
         with patch('submissions.api.get_scores') as mock_get_scores:
             mock_get_scores.return_value = {
-                self.problem_location('p3'): (1, 1)
+                self.problem_location('p3').to_deprecated_string(): (1, 1)
             }
             self.get_grade_summary()
 
             # Verify that the submissions API was sent an anonymized student ID
-            mock_get_scores.assert_called_with(self.course.id, '99ac6730dc5f900d69fd735975243b31')
+            mock_get_scores.assert_called_with(
+                self.course.id.to_deprecated_string(),
+                anonymous_id_for_user(self.student_user, self.course.id)
+            )
 
     def test_weighted_homework(self):
         """
@@ -631,7 +632,7 @@ class ProblemWithUploadedFilesTest(TestSubmittingProblems):
             self.addCleanup(fileobj.close)
 
         self.problem_setup("the_problem", filenames)
-        with patch('courseware.module_render.xqueue_interface.session') as mock_session:
+        with patch('courseware.module_render.XQUEUE_INTERFACE.session') as mock_session:
             resp = self.submit_question_answer("the_problem", {'2_1': fileobjs})
 
         self.assertEqual(resp.status_code, 200)
@@ -647,6 +648,7 @@ class ProblemWithUploadedFilesTest(TestSubmittingProblems):
         self.assertItemsEqual(kwargs['files'].keys(), filenames.split())
 
 
+@override_settings(MODULESTORE=TEST_DATA_MOCK_MODULESTORE)
 class TestPythonGradedResponse(TestSubmittingProblems):
     """
     Check that we can submit a schematic and custom response, and it answers properly.
@@ -903,9 +905,9 @@ class TestAnswerDistributions(TestSubmittingProblems):
         super(TestAnswerDistributions, self).setUp()
 
         self.homework = self.add_graded_section_to_course('homework')
-        self.add_dropdown_to_section(self.homework.location, 'p1', 1)
-        self.add_dropdown_to_section(self.homework.location, 'p2', 1)
-        self.add_dropdown_to_section(self.homework.location, 'p3', 1)
+        self.p1_html_id = self.add_dropdown_to_section(self.homework.location, 'p1', 1).location.html_id()
+        self.p2_html_id = self.add_dropdown_to_section(self.homework.location, 'p2', 1).location.html_id()
+        self.p3_html_id = self.add_dropdown_to_section(self.homework.location, 'p3', 1).location.html_id()
         self.refresh_course()
 
     def test_empty(self):
@@ -924,10 +926,10 @@ class TestAnswerDistributions(TestSubmittingProblems):
         self.assertEqual(
             distributions,
             {
-                ('p1', 'p1', 'i4x-MITx-100-problem-p1_2_1'): {
+                ('p1', 'p1', '{}_2_1'.format(self.p1_html_id)): {
                     u'ⓤⓝⓘⓒⓞⓓⓔ': 1
                 },
-                ('p2', 'p2', 'i4x-MITx-100-problem-p2_2_1'): {
+                ('p2', 'p2', '{}_2_1'.format(self.p2_html_id)): {
                     'Correct': 1
                 }
             }
@@ -946,7 +948,7 @@ class TestAnswerDistributions(TestSubmittingProblems):
         user2 = UserFactory.create()
         problems = StudentModule.objects.filter(
             course_id=self.course.id,
-            student_id=self.student_user.id
+            student=self.student_user
         )
         for problem in problems:
             problem.student_id = user2.id
@@ -959,14 +961,14 @@ class TestAnswerDistributions(TestSubmittingProblems):
         self.assertEqual(
             grades.answer_distributions(self.course.id),
             {
-                ('p1', 'p1', 'i4x-MITx-100-problem-p1_2_1'): {
+                ('p1', 'p1', '{}_2_1'.format(self.p1_html_id)): {
                     'Correct': 2
                 },
-                ('p2', 'p2', 'i4x-MITx-100-problem-p2_2_1'): {
+                ('p2', 'p2', '{}_2_1'.format(self.p2_html_id)): {
                     'Correct': 1,
                     'Incorrect': 1
                 },
-                ('p3', 'p3', 'i4x-MITx-100-problem-p3_2_1'): {
+                ('p3', 'p3', '{}_2_1'.format(self.p3_html_id)): {
                     'Correct': 1
                 }
             }
@@ -981,18 +983,18 @@ class TestAnswerDistributions(TestSubmittingProblems):
         # Now fetch the state entry for that problem.
         student_module = StudentModule.objects.get(
             course_id=self.course.id,
-            student_id=self.student_user.id
+            student=self.student_user
         )
         for val in ('Correct', True, False, 0, 0.0, 1, 1.0, None):
             state = json.loads(student_module.state)
-            state["student_answers"]['i4x-MITx-100-problem-p1_2_1'] = val
+            state["student_answers"]['{}_2_1'.format(self.p1_html_id)] = val
             student_module.state = json.dumps(state)
             student_module.save()
 
             self.assertEqual(
                 grades.answer_distributions(self.course.id),
                 {
-                    ('p1', 'p1', 'i4x-MITx-100-problem-p1_2_1'): {
+                    ('p1', 'p1', '{}_2_1'.format(self.p1_html_id)): {
                         str(val): 1
                     },
                 }
@@ -1008,9 +1010,11 @@ class TestAnswerDistributions(TestSubmittingProblems):
         # to a non-existent problem.
         student_module = StudentModule.objects.get(
             course_id=self.course.id,
-            student_id=self.student_user.id
+            student=self.student_user
         )
-        student_module.module_state_key += "_fake"
+        student_module.module_state_key = student_module.module_state_key.replace(
+            name=student_module.module_state_key.name + "_fake"
+        )
         student_module.save()
 
         # It should be empty (ignored)
@@ -1027,7 +1031,7 @@ class TestAnswerDistributions(TestSubmittingProblems):
         # Now fetch the StudentModule entry for p1 so we can corrupt its state
         prb1 = StudentModule.objects.get(
             course_id=self.course.id,
-            student_id=self.student_user.id
+            student=self.student_user
         )
 
         # Submit p2
@@ -1041,8 +1045,212 @@ class TestAnswerDistributions(TestSubmittingProblems):
             self.assertEqual(
                 grades.answer_distributions(self.course.id),
                 {
-                    ('p2', 'p2', 'i4x-MITx-100-problem-p2_2_1'): {
+                    ('p2', 'p2', '{}_2_1'.format(self.p2_html_id)): {
                         'Incorrect': 1
                     },
                 }
             )
+
+
+class TestConditionalContent(TestSubmittingProblems):
+    """
+    Check that conditional content works correctly with grading.
+    """
+    def setUp(self):
+        """
+        Set up a simple course with a grading policy, a UserPartition, and 2 sections, both graded as "homework".
+        One section is pre-populated with a problem (with 2 inputs), visible to all students.
+        The second section is empty. Test cases should add conditional content to it.
+        """
+        super(TestConditionalContent, self).setUp()
+
+        self.user_partition_group_0 = 0
+        self.user_partition_group_1 = 1
+        self.partition = UserPartition(
+            0,
+            'first_partition',
+            'First Partition',
+            [
+                Group(self.user_partition_group_0, 'alpha'),
+                Group(self.user_partition_group_1, 'beta')
+            ]
+        )
+
+        self.course = CourseFactory.create(
+            display_name=self.COURSE_NAME,
+            number=self.COURSE_SLUG,
+            user_partitions=[self.partition]
+        )
+
+        grading_policy = {
+            "GRADER": [{
+                "type": "Homework",
+                "min_count": 2,
+                "drop_count": 0,
+                "short_label": "HW",
+                "weight": 1.0
+            }]
+        }
+        self.add_grading_policy(grading_policy)
+
+        self.homework_all = self.add_graded_section_to_course('homework1')
+        self.p1_all_html_id = self.add_dropdown_to_section(self.homework_all.location, 'H1P1', 2).location.html_id()
+
+        self.homework_conditional = self.add_graded_section_to_course('homework2')
+
+    def split_setup(self, user_partition_group):
+        """
+        Setup for tests using split_test module. Creates a split_test instance as a child of self.homework_conditional
+        with 2 verticals in it, and assigns self.student_user to the specified user_partition_group.
+
+        The verticals are returned.
+        """
+        vertical_0_url = self.course.id.make_usage_key("vertical", "split_test_vertical_0")
+        vertical_1_url = self.course.id.make_usage_key("vertical", "split_test_vertical_1")
+
+        group_id_to_child = {}
+        for index, url in enumerate([vertical_0_url, vertical_1_url]):
+            group_id_to_child[str(index)] = url
+
+        split_test = ItemFactory.create(
+            parent_location=self.homework_conditional.location,
+            category="split_test",
+            display_name="Split test",
+            user_partition_id='0',
+            group_id_to_child=group_id_to_child,
+        )
+
+        vertical_0 = ItemFactory.create(
+            parent_location=split_test.location,
+            category="vertical",
+            display_name="Condition 0 vertical",
+            location=vertical_0_url,
+        )
+
+        vertical_1 = ItemFactory.create(
+            parent_location=split_test.location,
+            category="vertical",
+            display_name="Condition 1 vertical",
+            location=vertical_1_url,
+        )
+
+        # Now add the student to the specified group.
+        UserCourseTagFactory(
+            user=self.student_user,
+            course_id=self.course.id,
+            key='xblock.partition_service.partition_{0}'.format(self.partition.id),  # pylint: disable=no-member
+            value=str(user_partition_group)
+        )
+
+        return vertical_0, vertical_1
+
+    def split_different_problems_setup(self, user_partition_group):
+        """
+        Setup for the case where the split test instance contains problems for each group
+        (so both groups do have graded content, though it is different).
+
+        Group 0 has 2 problems, worth 1 and 3 points respectively.
+        Group 1 has 1 problem, worth 1 point.
+
+        This method also assigns self.student_user to the specified user_partition_group and
+        then submits answers for the problems in section 1, which are visible to all students.
+        The submitted answers give the student 1 point out of a possible 2 points in the section.
+        """
+        vertical_0, vertical_1 = self.split_setup(user_partition_group)
+
+        # Group 0 will have 2 problems in the section, worth a total of 4 points.
+        self.add_dropdown_to_section(vertical_0.location, 'H2P1', 1).location.html_id()
+        self.add_dropdown_to_section(vertical_0.location, 'H2P2', 3).location.html_id()
+
+        # Group 1 will have 1 problem in the section, worth a total of 1 point.
+        self.add_dropdown_to_section(vertical_1.location, 'H2P1', 1).location.html_id()
+
+        # Submit answers for problem in Section 1, which is visible to all students.
+        self.submit_question_answer('H1P1', {'2_1': 'Correct', '2_2': 'Incorrect'})
+
+    def test_split_different_problems_group_0(self):
+        """
+        Tests that users who see different problems in a split_test module instance are graded correctly.
+        This is the test case for a user in user partition group 0.
+        """
+        self.split_different_problems_setup(self.user_partition_group_0)
+
+        self.submit_question_answer('H2P1', {'2_1': 'Correct'})
+        self.submit_question_answer('H2P2', {'2_1': 'Correct', '2_2': 'Incorrect', '2_3': 'Correct'})
+
+        self.assertEqual(self.score_for_hw('homework1'), [1.0])
+        self.assertEqual(self.score_for_hw('homework2'), [1.0, 2.0])
+        self.assertEqual(self.earned_hw_scores(), [1.0, 3.0])
+
+        # Grade percent is .63. Here is the calculation
+        homework_1_score = 1.0 / 2
+        homework_2_score = (1.0 + 2.0) / 4
+        self.check_grade_percent(round((homework_1_score + homework_2_score) / 2, 2))
+
+    def test_split_different_problems_group_1(self):
+        """
+        Tests that users who see different problems in a split_test module instance are graded correctly.
+        This is the test case for a user in user partition group 1.
+        """
+        self.split_different_problems_setup(self.user_partition_group_1)
+
+        self.submit_question_answer('H2P1', {'2_1': 'Correct'})
+
+        self.assertEqual(self.score_for_hw('homework1'), [1.0])
+        self.assertEqual(self.score_for_hw('homework2'), [1.0])
+        self.assertEqual(self.earned_hw_scores(), [1.0, 1.0])
+
+        # Grade percent is .75. Here is the calculation
+        homework_1_score = 1.0 / 2
+        homework_2_score = 1.0 / 1
+        self.check_grade_percent(round((homework_1_score + homework_2_score) / 2, 2))
+
+    def split_one_group_no_problems_setup(self, user_partition_group):
+        """
+        Setup for the case where the split test instance contains problems on for one group.
+
+        Group 0 has no problems.
+        Group 1 has 1 problem, worth 1 point.
+
+        This method also assigns self.student_user to the specified user_partition_group and
+        then submits answers for the problems in section 1, which are visible to all students.
+        The submitted answers give the student 2 points out of a possible 2 points in the section.
+        """
+        [_, vertical_1] = self.split_setup(user_partition_group)
+
+        # Group 1 will have 1 problem in the section, worth a total of 1 point.
+        self.add_dropdown_to_section(vertical_1.location, 'H2P1', 1).location.html_id()
+
+        self.submit_question_answer('H1P1', {'2_1': 'Correct'})
+
+    def test_split_one_group_no_problems_group_0(self):
+        """
+        Tests what happens when a given group has no problems in it (students receive 0 for that section).
+        """
+        self.split_one_group_no_problems_setup(self.user_partition_group_0)
+
+        self.assertEqual(self.score_for_hw('homework1'), [1.0])
+        self.assertEqual(self.score_for_hw('homework2'), [])
+        self.assertEqual(self.earned_hw_scores(), [1.0, 0.0])
+
+        # Grade percent is .25. Here is the calculation.
+        homework_1_score = 1.0 / 2
+        homework_2_score = 0.0
+        self.check_grade_percent(round((homework_1_score + homework_2_score) / 2, 2))
+
+    def test_split_one_group_no_problems_group_1(self):
+        """
+        Verifies students in the group that DOES have a problem receive a score for their problem.
+        """
+        self.split_one_group_no_problems_setup(self.user_partition_group_1)
+
+        self.submit_question_answer('H2P1', {'2_1': 'Correct'})
+
+        self.assertEqual(self.score_for_hw('homework1'), [1.0])
+        self.assertEqual(self.score_for_hw('homework2'), [1.0])
+        self.assertEqual(self.earned_hw_scores(), [1.0, 1.0])
+
+        # Grade percent is .75. Here is the calculation.
+        homework_1_score = 1.0 / 2
+        homework_2_score = 1.0 / 1
+        self.check_grade_percent(round((homework_1_score + homework_2_score) / 2, 2))

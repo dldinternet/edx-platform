@@ -102,7 +102,6 @@ class CourseNavPage(PageObject):
         self.q(css=subsection_css).first.click()
         self._on_section_promise(section_title, subsection_title).fulfill()
 
-
     def go_to_sequential(self, sequential_title):
         """
         Within a section/subsection, navigate to the sequential with `sequential_title`.
@@ -148,7 +147,8 @@ class CourseNavPage(PageObject):
         # It *would* make sense to always get the HTML, but unfortunately
         # the open tab has some child <span> tags that we don't want.
         return self.q(
-            css=subsection_css).map(
+            css=subsection_css
+        ).map(
             lambda el: el.text.strip().split('\n')[0] if el.is_displayed() else el.get_attribute('innerHTML').strip()
         ).results
 
@@ -196,3 +196,14 @@ class CourseNavPage(PageObject):
         Clean HTML of sequence titles, stripping out span tags and returning the first line.
         """
         return self.REMOVE_SPAN_TAG_RE.sub('', element.get_attribute('innerHTML')).strip().split('\n')[0]
+
+    def go_to_sequential_position(self, sequential_position):
+        """
+        Within a section/subsection navigate to the sequential position specified by `sequential_position`.
+
+        Arguments:
+            sequential_position (int): position in sequential bar
+
+        """
+        sequential_position_css = '#tab_{0}'.format(sequential_position - 1)
+        self.q(css=sequential_position_css).first.click()

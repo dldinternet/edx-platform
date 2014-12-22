@@ -2,6 +2,7 @@ from django.contrib.auth.models import User
 from django.db import models
 from datetime import datetime
 from model_utils import Choices
+from xmodule_django.models import CourseKeyField, NoneToEmptyManager
 
 """
 Certificates are created for a student and an offering of a course.
@@ -48,20 +49,20 @@ Eligibility:
        If the user and course is present in the certificate whitelist table
        then the student will be issued a certificate regardless of his grade,
        unless he has allow_certificate set to False.
-
 """
 
 
 class CertificateStatuses(object):
-    deleted      = 'deleted'
-    deleting     = 'deleting'
+    deleted = 'deleted'
+    deleting = 'deleting'
     downloadable = 'downloadable'
-    error        = 'error'
-    generating   = 'generating'
-    notpassing   = 'notpassing'
+    error = 'error'
+    generating = 'generating'
+    notpassing = 'notpassing'
     regenerating = 'regenerating'
-    restricted   = 'restricted'
-    unavailable  = 'unavailable'
+    restricted = 'restricted'
+    unavailable = 'unavailable'
+
 
 class CertificateWhitelist(models.Model):
     """
@@ -71,22 +72,27 @@ class CertificateWhitelist(models.Model):
     embargoed country restriction list
     (allow_certificate set to False in userprofile).
     """
+
+    objects = NoneToEmptyManager()
+
     user = models.ForeignKey(User)
-    course_id = models.CharField(max_length=255, blank=True, default='')
+    course_id = CourseKeyField(max_length=255, blank=True, default=None)
     whitelist = models.BooleanField(default=0)
 
 
 class GeneratedCertificate(models.Model):
+
+    MODES = Choices('verified', 'honor', 'audit')
+
     user = models.ForeignKey(User)
-    course_id = models.CharField(max_length=255, blank=True, default='')
+    course_id = CourseKeyField(max_length=255, blank=True, default=None)
     verify_uuid = models.CharField(max_length=32, blank=True, default='')
     download_uuid = models.CharField(max_length=32, blank=True, default='')
-    download_url = models.CharField(max_length=128, blank=True,  default='')
+    download_url = models.CharField(max_length=128, blank=True, default='')
     grade = models.CharField(max_length=5, blank=True, default='')
     key = models.CharField(max_length=32, blank=True, default='')
     distinction = models.BooleanField(default=False)
     status = models.CharField(max_length=32, default='unavailable')
-    MODES = Choices('verified', 'honor', 'audit')
     mode = models.CharField(max_length=32, choices=MODES, default=MODES.honor)
     name = models.CharField(blank=True, max_length=255)
     created_date = models.DateTimeField(
@@ -97,6 +103,19 @@ class GeneratedCertificate(models.Model):
 
     class Meta:
         unique_together = (('user', 'course_id'),)
+
+    @classmethod
+    def certificate_for_student(cls, student, course_id):
+        """
+        This returns the certificate for a student for a particular course
+        or None if no such certificate exits.
+        """
+        try:
+            return cls.objects.get(user=student, course_id=course_id)
+        except cls.DoesNotExist:
+            pass
+
+        return None
 
 
 def certificate_status_for_student(student, course_id):

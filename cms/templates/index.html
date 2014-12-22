@@ -1,35 +1,14 @@
 <%! from django.utils.translation import ugettext as _ %>
 
 <%inherit file="base.html" />
-
+<%def name="online_help_token()"><% return "home" %></%def>
 <%block name="title">${_("My Courses")}</%block>
 <%block name="bodyclass">is-signedin index view-dashboard</%block>
 
-<%block name="jsextra">
-<script type="text/javascript">
-require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
-    // showing/hiding creation rights UI
-    $('.show-creationrights').click(function(e){
-        (e).preventDefault();
-        $(this).closest('.wrapper-creationrights').toggleClass('is-shown').find('.ui-toggle-control').toggleClass('current');
-    });
-
-    var reloadPage = function () {
-        location.reload();
-    };
-
-    var showError = function ()  {
-        $('#request-coursecreator-submit').toggleClass('has-error').find('.label').text('Sorry, there was error with your request');
-        $('#request-coursecreator-submit').find('.icon-cog').toggleClass('icon-spin');
-    };
-
-    $('#request-coursecreator').ajaxForm({error: showError, success: reloadPage});
-
-    $('#request-coursecreator-submit').click(function(e){
-      $(this).toggleClass('is-disabled is-submitting').find('.label').text('Submitting Your Request');
-    });
-});
-</script>
+<%block name="requirejs">
+  require(["js/factories/index"], function (IndexFactory) {
+      IndexFactory();
+  });
 </%block>
 
 <%block name="content">
@@ -77,7 +56,7 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
 
       % if course_creator_status=='granted':
       <div class="wrapper-create-element wrapper-create-course">
-        <form class="create-course course-info" id="create-course-form" name="create-course-form">
+        <form class="form-create create-course course-info" id="create-course-form" name="create-course-form">
           <div class="wrap-error">
             <div id="course_creation_error" name="course_creation_error" class="message message-status message-status error" role="alert">
             <p>${_("Please correct the highlighted fields below.")}</p>
@@ -94,7 +73,7 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
                 <li class="field text required" id="field-course-name">
                   <label for="new-course-name">${_("Course Name")}</label>
                   <input class="new-course-name" id="new-course-name" type="text" name="new-course-name" aria-required="true" placeholder="${_('e.g. Introduction to Computer Science')}" />
-                  <span class="tip">${_("The public display name for your course.")}</span>
+                  <span class="tip">${_("The public display name for your course. This cannot be changed, but you can set a different display name in Advanced Settings later.")}</span>
                   <span class="tip tip-error is-hiding"></span>
                 </li>
                 <li class="field text required" id="field-organization">
@@ -123,7 +102,7 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
           </div>
 
           <div class="actions">
-            <input type="hidden" value="${ allow_unicode_course_id }" class="allow-unicode-course-id" />
+            <input type="hidden" value="${allow_unicode_course_id}" class="allow-unicode-course-id" />
             <input type="submit" value="${_('Create')}" class="action action-primary new-course-save" />
             <input type="button" value="${_('Cancel')}" class="action action-secondary action-cancel new-course-cancel" />
           </div>
@@ -131,31 +110,134 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
       </div>
       % endif
 
+      <!-- STATE: processing courses -->
+      %if allow_course_reruns and rerun_creator_status and len(in_process_course_actions) > 0:
+      <div class="courses courses-processing">
+          <h3 class="title">${_("Courses Being Processed")}</h3>
+
+          <ul class="list-courses">
+            %for course_info in sorted(in_process_course_actions, key=lambda s: s['display_name'].lower() if s['display_name'] is not None else ''):
+            <!-- STATE: re-run is processing -->
+            %if course_info['is_in_progress']:
+            <li class="wrapper-course has-status" data-course-key="${course_info['course_key'] | h}">
+              <div class="course-item course-rerun is-processing">
+                <div class="course-details" href="#">
+                  <h3 class="course-title">${course_info['display_name']}</h3>
+
+                  <div class="course-metadata">
+                    <span class="course-org metadata-item">
+                      <span class="label">${_("Organization:")}</span> <span class="value">${course_info['org']}</span>
+                    </span>
+                    <span class="course-num metadata-item">
+                      <span class="label">${_("Course Number:")}</span>
+                      <span class="value">${course_info['number']}</span>
+                    </span>
+                    <span class="course-run metadata-item">
+                      <span class="label">${_("Course Run:")}</span> <span class="value">${course_info['run']}</span>
+                    </span>
+                  </div>
+                </div>
+
+                <dl class="course-status">
+                  <dt class="label sr">${_("This course run is currently being created.")}</dt>
+                  <dd class="value">
+                    <i class="icon icon-refresh icon-spin"></i>
+                    ## Translators: This is a status message, used to inform the user of what the system is doing. This status means that the user has requested to re-run an existing course, and the system is currently in the process of duplicating and configuring the existing course so that it can be re-run.
+                    <span class="copy">${_("Configuring as re-run")}</span>
+                  </dd>
+                </dl>
+              </div>
+
+              <div class="status-message">
+                <p class="copy">${_('The new course will be added to your course list in 5-10 minutes. Return to this page or {link_start}refresh it{link_end} to update the course list. The new course will need some manual configuration.').format(
+                    link_start='<a href="#" class="action-reload">',
+                    link_end='</a>',
+                  )}</p>
+              </div>
+            </li>
+            %endif
+
+            <!-- - - - -->
+
+            <!-- STATE: re-run has error -->
+            %if course_info['is_failed']:
+            <li class="wrapper-course has-status" data-course-key="${course_info['course_key'] | h}">
+              <div class="course-item course-rerun has-error">
+                <div class="course-details" href="#">
+                  <h3 class="course-title">${course_info['display_name']}</h3>
+
+                  <div class="course-metadata">
+                    <span class="course-org metadata-item">
+                      <span class="label">${_("Organization:")}</span> <span class="value">${course_info['org']}</span>
+                    </span>
+                    <span class="course-num metadata-item">
+                      <span class="label">${_("Course Number:")}</span>
+                      <span class="value">${course_info['number']}</span>
+                    </span>
+                    <span class="course-run metadata-item">
+                      <span class="label">${_("Course Run:")}</span> <span class="value">${course_info['run']}</span>
+                    </span>
+                  </div>
+                </div>
+
+                <dl class="course-status">
+                  <dt class="label sr">This re-run processing status:</dt>
+                  <dd class="value">
+                    <i class="icon icon-warning-sign"></i>
+                    <span class="copy">Configuration Error</span>
+                  </dd>
+                </dl>
+              </div>
+
+              <div class="status-message has-actions">
+                <p class="copy">${_("A system error occurred while your course was being processed. Please go to the original course to try the re-run again, or contact your PM for assistance.")}</p>
+
+                <ul  class="status-actions">
+                  <li class="action action-dismiss">
+                    <a href="#" class="button dismiss-button" data-dismiss-link="${course_info['dismiss_link']}">
+                      <i class="icon icon-remove-sign"></i>
+                      <span class="button-copy">${_("Dismiss")}</span>
+                    </a>
+                  </li>
+                </ul>
+              </div>
+            </li>
+            %endif
+            %endfor
+          </ul>
+      </div>
+      %endif
+
       %if len(courses) > 0:
       <div class="courses">
         <ul class="list-courses">
-          %for course, url, lms_link, org, num, run in sorted(courses, key=lambda s: s[0].lower() if s[0] is not None else ''):
-          <li class="course-item">
-            <a class="course-link" href="${url}">
-              <h3 class="course-title">${course}</h3>
+          %for course_info in sorted(courses, key=lambda s: s['display_name'].lower() if s['display_name'] is not None else ''):
+          <li class="course-item" data-course-key="${course_info['course_key'] | h}">
+            <a class="course-link" href="${course_info['url']}">
+              <h3 class="course-title">${course_info['display_name']}</h3>
 
               <div class="course-metadata">
                 <span class="course-org metadata-item">
-                  <span class="label">${_("Organization:")}</span> <span class="value">${org}</span>
+                  <span class="label">${_("Organization:")}</span> <span class="value">${course_info['org']}</span>
                 </span>
                 <span class="course-num metadata-item">
                   <span class="label">${_("Course Number:")}</span>
-                  <span class="value">${num}</span>
+                  <span class="value">${course_info['number']}</span>
                 </span>
                 <span class="course-run metadata-item">
-                  <span class="label">${_("Course Run:")}</span> <span class="value">${run}</span>
+                  <span class="label">${_("Course Run:")}</span> <span class="value">${course_info['run']}</span>
                 </span>
               </div>
             </a>
 
             <ul  class="item-actions course-actions">
-              <li class="action">
-                <a href="${lms_link}" rel="external" class="button view-button view-live-button">${_("View Live")}</a>
+              % if allow_course_reruns and rerun_creator_status and course_creator_status=='granted':
+              <li class="action action-rerun">
+                <a href="${course_info['rerun_link']}" class="button rerun-button">${_("Re-run Course")}</a>
+              </li>
+              % endif
+              <li class="action action-view">
+                <a href="${course_info['lms_link']}" rel="external" class="button view-button">${_("View Live")}</a>
               </li>
             </ul>
           </li>
@@ -275,39 +357,47 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
       % endif
 
     </article>
-
-    <aside class="content-supplementary" role="complimentary">
+    <aside class="content-supplementary" role="complementary">
       <div class="bit">
-        <h3 class="title title-3">${_('Need help?')}</h3>
-        <p>${_('If you are new to Studio and having trouble getting started, there are a few things that may be of help:')}</p>
+        <h3 class="title title-3">${_('New to edX Studio?')}</h3>
+        <p>${_('Click Help in the upper-right corner to get more information about the Studio page you are viewing. You can also use the links at the bottom of the page to access our continously updated documentation and other Studio resources.')}</p>
 
         <ol class="list-actions">
           <li class="action-item">
-            <a href="http://files.edx.org/Getting_Started_with_Studio.pdf" title="This is a PDF Document">${_('Get started by reading Studio\'s Documentation')}</a>
+
+            <a href="${get_online_help_info(online_help_token())['doc_url']}" target="_blank">${_("Getting Started with edX Studio")}</a>
           </li>
           <li class="action-item">
-            <a href="http://help.edge.edx.org/discussion/new" class="show-tender" title="Use our feedback tool, Tender, to request help">${_('Request help with Studio')}</a>
+            <a href="http://help.edge.edx.org/discussion/new" class="show-tender" title="${_("Use our feedback tool, Tender, to request help")}">${_("Request help with edX Studio")}</a>
           </li>
         </ol>
       </div>
 
       % if course_creator_status=='disallowed_for_this_site' and settings.FEATURES.get('STUDIO_REQUEST_EMAIL',''):
       <div class="bit">
-        <h3 class="title title-3">${_('Can I create courses in Studio?')}</h3>
-        <p>${_('In order to create courses in Studio, you must')} <a href="mailto:${settings.FEATURES.get('STUDIO_REQUEST_EMAIL','')}">${_("contact edX staff to help you create a course")}</a></p>
+        <h3 class="title title-3">${_("Can I create courses in Studio?")}</h3>
+        <p>${_("In order to create courses in Studio, you must {link_start}contact edX staff to help you create a course{link_end}.").format(
+            link_start='<a href="mailto:{email}">'.format(email=settings.FEATURES.get('STUDIO_REQUEST_EMAIL','')),
+            link_end="</a>",
+          )}</p>
       </div>
       % endif
 
       % if course_creator_status == "unrequested":
       <div class="bit">
-        <h3 class="title title-3">${_('Can I create courses in Studio?')}</h3>
+        <h3 class="title title-3">${_("Can I create courses in Studio?")}</h3>
         <p>${_('In order to create courses in Studio, you must have course creator privileges to create your own course.')}</p>
       </div>
 
       % elif course_creator_status == "denied":
       <div class="bit">
-        <h3 class="title title-3">${_('Can I create courses in Studio?')}</h3>
-        <p>${_('Your request to author courses in studio has been denied. Please')} <a href="http://help.edge.edx.org/discussion/new" class="show-tender">${_('contact edX Staff with further questions')}</a></p>
+        <h3 class="title title-3">${_("Can I create courses in Studio?")}</h3>
+        <p>${_("Your request to author courses in Studio has been denied. Please {link_start}contact edX Staff with further questions{link_end}.").format(
+            link_start='<a href="{url}" class="show-tender">'.format(
+              url="http://help.edge.edx.org/discussion/new",
+            ),
+            link_end="</a>",
+          )}</p>
       </div>
 
       % endif
@@ -324,7 +414,7 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
 
       <div class="notice notice-incontext notice-instruction notice-instruction-verification">
         <div class="msg">
-          <h3 class="title">${_('We need to verify your email address')}</h3>
+          <h3 class="title">${_("We need to verify your email address")}</h3>
           <div class="copy">
             <p>${_('Almost there! In order to complete your sign up we need you to verify your email address (%(email)s). An activation message and next steps should be waiting for you there.') % dict(email=user.email)}</p>
           </div>
@@ -332,14 +422,14 @@ require(["domReady!", "jquery", "jquery.form", "js/index"], function(doc, $) {
       </div>
     </article>
 
-    <aside class="content-supplementary" role="complimentary">
+    <aside class="content-supplementary" role="complementary">
       <div class="bit">
         <h3 class="title title-3">${_('Need help?')}</h3>
         <p>${_('Please check your Junk or Spam folders in case our email isn\'t in your INBOX. Still can\'t find the verification email? Request help via the link below.')}</p>
 
         <ol class='list-actions'>
           <li class="action-item">
-            <a href="http://help.edge.edx.org/discussion/new" class="show-tender" title="Use our feedback tool, Tender, to request help">Request help with your Studio account</a>
+            <a href="http://help.edge.edx.org/discussion/new" class="show-tender" title="${_("Use our feedback tool, Tender, to request help")}">${_("Request help with your Studio account")}</a>
           </li>
         </ol>
       </div>

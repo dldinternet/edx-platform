@@ -1,30 +1,32 @@
 # disable missing docstring
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 
 from lettuce import world
-from nose.tools import assert_equal, assert_in  # pylint: disable=E0611
+from nose.tools import assert_equal, assert_in  # pylint: disable=no-name-in-module
 from terrain.steps import reload_the_page
 from common import type_in_codemirror
 from selenium.webdriver.common.keys import Keys
-from cms.envs.common import FEATURES
 
 
 @world.absorb
-def create_component_instance(step, category, component_type=None, is_advanced=False):
+def create_component_instance(step, category, component_type=None, is_advanced=False, advanced_component=None):
     """
     Create a new component in a Unit.
 
     Parameters
     ----------
-    category: component type (discussion, html, problem, video)
+    category: component type (discussion, html, problem, video, advanced)
     component_type: for components with multiple templates, the link text in the menu
     is_advanced: for problems, is the desired component under the advanced menu?
+    advanced_component: for advanced components, the related value of policy key 'advanced_modules'
     """
-    assert_in(category, ['problem', 'html', 'video', 'discussion'])
+    assert_in(category, ['advanced', 'problem', 'html', 'video', 'discussion'])
 
     component_button_css = 'span.large-{}-icon'.format(category.lower())
     if category == 'problem':
         module_css = 'div.xmodule_CapaModule'
+    elif category == 'advanced':
+        module_css = 'div.xmodule_{}Module'.format(advanced_component.title())
     else:
         module_css = 'div.xmodule_{}Module'.format(category.title())
 
@@ -32,13 +34,13 @@ def create_component_instance(step, category, component_type=None, is_advanced=F
     # assert that one more was added.
     # We need to use world.browser.find_by_css instead of world.css_find
     # because it's ok if there are currently zero of them.
-    module_count_before =  len(world.browser.find_by_css(module_css))
+    module_count_before = len(world.browser.find_by_css(module_css))
 
     # Disable the jquery animation for the transition to the menus.
     world.disable_jquery_animations()
     world.css_click(component_button_css)
 
-    if category in ('problem', 'html'):
+    if category in ('problem', 'html', 'advanced'):
         world.wait_for_invisible(component_button_css)
         click_component_from_menu(category, component_type, is_advanced)
 
@@ -91,8 +93,10 @@ def click_component_from_menu(category, component_type, is_advanced):
     """
     if is_advanced:
         # Sometimes this click does not work if you go too fast.
-        world.retry_on_exception(_click_advanced,
-            ignored_exceptions=AssertionError)
+        world.retry_on_exception(
+            _click_advanced,
+            ignored_exceptions=AssertionError,
+        )
 
     # Retry this in case the list is empty because you tried too fast.
     link = world.retry_on_exception(
@@ -119,9 +123,13 @@ def ensure_settings_visible():
 
 
 @world.absorb
-def edit_component():
+def edit_component(index=0):
+    # Verify that the "loading" indication has been hidden.
+    world.wait_for_loading()
+    # Verify that the "edit" button is present.
     world.wait_for(lambda _driver: world.css_visible('a.edit-button'))
-    world.css_click('a.edit-button')
+    world.css_click('a.edit-button', index)
+    world.wait_for_ajax_complete()
 
 
 @world.absorb

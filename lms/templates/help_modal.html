@@ -37,7 +37,7 @@
 
 <%
   discussion_tab = CourseTabList.get_discussion(course) if course else None
-  discussion_link = discussion_tab.link_func(course, reverse) if (discussion_tab and discussion_tab.can_display(course, settings, True, True)) else None
+  discussion_link = discussion_tab.link_func(course, reverse) if (discussion_tab and discussion_tab.can_display(course, settings, True, True, True)) else None
 %>
 
 % if discussion_link:
@@ -99,7 +99,7 @@
       <textarea name="details" id="feedback_form_details" aria-required="true"></textarea>
       <input name="issue_type" type="hidden">
 % if course:
-      <input name="course_id" type="hidden" value="${course.id | h}">
+      <input name="course_id" type="hidden" value="${course.id.to_deprecated_string() | h}">
 % endif
       <div class="submit">
         <input name="submit" type="submit" value="${_('Submit')}" id="feedback_submit">
@@ -149,7 +149,7 @@
 <script type="text/javascript">
 (function() {
     var onModalClose = function() {
-            $(".help-modal .close-modal").off("click");
+            $("#help-modal .close-modal").off("click");
             $("#lean_overlay").off("click");
             $("#help-modal").attr("aria-hidden", "true");
             $('area,input,select,textarea,button').removeAttr('tabindex');

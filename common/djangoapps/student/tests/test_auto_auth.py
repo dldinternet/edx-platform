@@ -6,13 +6,26 @@ from django_comment_common.models import (
 from django_comment_common.utils import seed_permissions_roles
 from student.models import CourseEnrollment, UserProfile
 from util.testing import UrlResetMixin
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
+from opaque_keys.edx.locator import CourseLocator
 from mock import patch
+import ddt
 
 
+@ddt.ddt
 class AutoAuthEnabledTestCase(UrlResetMixin, TestCase):
     """
     Tests for the Auto auth view that we have for load testing.
     """
+
+    COURSE_ID_MONGO = 'edX/Test101/2014_Spring'
+    COURSE_ID_SPLIT = 'course-v1:edX+Test101+2014_Spring'
+    COURSE_IDS_DDT = (
+        (COURSE_ID_MONGO, SlashSeparatedCourseKey.from_deprecated_string(COURSE_ID_MONGO)),
+        (COURSE_ID_SPLIT, SlashSeparatedCourseKey.from_deprecated_string(COURSE_ID_SPLIT)),
+        (COURSE_ID_MONGO, CourseLocator.from_string(COURSE_ID_MONGO)),
+        (COURSE_ID_SPLIT, CourseLocator.from_string(COURSE_ID_SPLIT)),
+    )
 
     @patch.dict("django.conf.settings.FEATURES", {"AUTOMATIC_AUTH_FOR_TESTING": True})
     def setUp(self):
@@ -80,21 +93,23 @@ class AutoAuthEnabledTestCase(UrlResetMixin, TestCase):
         user = User.objects.get(username='test')
         self.assertFalse(user.is_staff)
 
-    def test_course_enrollment(self):
+    @ddt.data(*COURSE_IDS_DDT)
+    @ddt.unpack
+    def test_course_enrollment(self, course_id, course_key):
 
         # Create a user and enroll in a course
-        course_id = "edX/Test101/2014_Spring"
         self._auto_auth(username='test', course_id=course_id)
 
         # Check that a course enrollment was created for the user
         self.assertEqual(CourseEnrollment.objects.count(), 1)
-        enrollment = CourseEnrollment.objects.get(course_id=course_id)
+        enrollment = CourseEnrollment.objects.get(course_id=course_key)
         self.assertEqual(enrollment.user.username, "test")
 
-    def test_double_enrollment(self):
+    @ddt.data(*COURSE_IDS_DDT)
+    @ddt.unpack
+    def test_double_enrollment(self, course_id, course_key):
 
         # Create a user and enroll in a course
-        course_id = "edX/Test101/2014_Spring"
         self._auto_auth(username='test', course_id=course_id)
 
         # Make the same call again, re-enrolling the student in the same course
@@ -102,14 +117,14 @@ class AutoAuthEnabledTestCase(UrlResetMixin, TestCase):
 
         # Check that only one course enrollment was created for the user
         self.assertEqual(CourseEnrollment.objects.count(), 1)
-        enrollment = CourseEnrollment.objects.get(course_id=course_id)
+        enrollment = CourseEnrollment.objects.get(course_id=course_key)
         self.assertEqual(enrollment.user.username, "test")
 
-    def test_set_roles(self):
-
-        course_id = "edX/Test101/2014_Spring"
-        seed_permissions_roles(course_id)
-        course_roles = dict((r.name, r) for r in Role.objects.filter(course_id=course_id))
+    @ddt.data(*COURSE_IDS_DDT)
+    @ddt.unpack
+    def test_set_roles(self, course_id, course_key):
+        seed_permissions_roles(course_key)
+        course_roles = dict((r.name, r) for r in Role.objects.filter(course_id=course_key))
         self.assertEqual(len(course_roles), 4)  # sanity check
 
         # Student role is assigned by default on course enrollment.
@@ -148,8 +163,8 @@ class AutoAuthEnabledTestCase(UrlResetMixin, TestCase):
 
         # Check that session and CSRF are set in the response
         for cookie in ['csrftoken', 'sessionid']:
-            self.assertIn(cookie, response.cookies)  # pylint: disable=E1103
-            self.assertTrue(response.cookies[cookie].value)  # pylint: disable=E1103
+            self.assertIn(cookie, response.cookies)  # pylint: disable=maybe-no-member
+            self.assertTrue(response.cookies[cookie].value)  # pylint: disable=maybe-no-member
 
 
 class AutoAuthDisabledTestCase(UrlResetMixin, TestCase):

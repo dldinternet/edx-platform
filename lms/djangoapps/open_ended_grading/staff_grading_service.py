@@ -9,18 +9,17 @@ from django.conf import settings
 from django.http import HttpResponse, Http404
 from django.utils.translation import ugettext as _
 
-from xmodule.course_module import CourseDescriptor
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
 from xmodule.open_ended_grading_classes.grading_service_module import GradingService, GradingServiceError
 from xmodule.modulestore.django import ModuleI18nService
 
 from courseware.access import has_access
-from lms.lib.xblock.runtime import LmsModuleSystem
+from lms.djangoapps.lms_xblock.runtime import LmsModuleSystem
 from edxmako.shortcuts import render_to_string
 from student.models import unique_id_for_user
-from util.json_request import expect_json
 
 from open_ended_grading.utils import does_location_exist
-from dogapi import dog_stats_api
+import dogstats_wrapper as dog_stats_api
 
 log = logging.getLogger(__name__)
 
@@ -58,15 +57,25 @@ class MockStaffGradingService(object):
 
     def get_problem_list(self, course_id, grader_id):
         self.cnt += 1
-        return {'success': True,
-                 'problem_list': [
-                     json.dumps({'location': 'i4x://MITx/3.091x/problem/open_ended_demo1',
-                                 'problem_name': "Problem 1", 'num_graded': 3, 'num_pending': 5,
-                                 'min_for_ml': 10}),
-                     json.dumps({'location': 'i4x://MITx/3.091x/problem/open_ended_demo2',
-                                 'problem_name': "Problem 2", 'num_graded': 1, 'num_pending': 5,
-                                 'min_for_ml': 10})
-                 ]}
+        return {
+            'success': True,
+            'problem_list': [
+                json.dumps({
+                    'location': 'i4x://MITx/3.091x/problem/open_ended_demo1',
+                    'problem_name': "Problem 1",
+                    'num_graded': 3,
+                    'num_pending': 5,
+                    'min_for_ml': 10,
+                }),
+                json.dumps({
+                    'location': 'i4x://MITx/3.091x/problem/open_ended_demo2',
+                    'problem_name': "Problem 2",
+                    'num_graded': 1,
+                    'num_pending': 5,
+                    'min_for_ml': 10,
+                }),
+            ],
+        }
 
     def save_grade(self, course_id, grader_id, submission_id, score, feedback, skipped, rubric_scores,
                    submission_flagged):
@@ -116,7 +125,7 @@ class StaffGradingService(GradingService):
         Raises:
             GradingServiceError: something went wrong with the connection.
         """
-        params = {'course_id': course_id, 'grader_id': grader_id}
+        params = {'course_id': course_id.to_deprecated_string(), 'grader_id': grader_id}
         result = self.get(self.get_problem_list_url, params)
         tags = [u'course_id:{}'.format(course_id)]
         self._record_result('get_problem_list', result, tags)
@@ -148,7 +157,7 @@ class StaffGradingService(GradingService):
             self.get(
                 self.get_next_url,
                 params={
-                    'location': location,
+                    'location': location.to_deprecated_string(),
                     'grader_id': grader_id
                 }
             )
@@ -170,7 +179,7 @@ class StaffGradingService(GradingService):
         Raises:
             GradingServiceError if there's a problem connecting.
         """
-        data = {'course_id': course_id,
+        data = {'course_id': course_id.to_deprecated_string(),
                 'submission_id': submission_id,
                 'score': score,
                 'feedback': feedback,
@@ -186,7 +195,7 @@ class StaffGradingService(GradingService):
         return result
 
     def get_notifications(self, course_id):
-        params = {'course_id': course_id}
+        params = {'course_id': course_id.to_deprecated_string()}
         result = self.get(self.get_notifications_url, params)
         tags = [
             u'course_id:{}'.format(course_id),
@@ -233,8 +242,7 @@ def _check_access(user, course_id):
     """
     Raise 404 if user doesn't have staff access to course_id
     """
-    course_location = CourseDescriptor.id_to_location(course_id)
-    if not has_access(user, course_location, 'staff'):
+    if not has_access(user, 'staff', course_id):
         raise Http404
 
     return
@@ -261,7 +269,9 @@ def get_next(request, course_id):
 
     'error': if success is False, will have an error message with more info.
     """
-    _check_access(request.user, course_id)
+    assert(isinstance(course_id, basestring))
+    course_key = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+    _check_access(request.user, course_key)
 
     required = set(['location'])
     if request.method != 'POST':
@@ -273,10 +283,11 @@ def get_next(request, course_id):
             ', '.join(missing)))
     grader_id = unique_id_for_user(request.user)
     p = request.POST
-    location = p['location']
+    location = course_key.make_usage_key_from_deprecated_string(p['location'])
 
-    return HttpResponse(json.dumps(_get_next(course_id, grader_id, location)),
+    return HttpResponse(json.dumps(_get_next(course_key, grader_id, location)),
                         mimetype="application/json")
+
 
 def get_problem_list(request, course_id):
     """
@@ -301,9 +312,11 @@ def get_problem_list(request, course_id):
 
         'error': if success is False, will have an error message with more info.
     """
-    _check_access(request.user, course_id)
+    assert(isinstance(course_id, basestring))
+    course_key = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+    _check_access(request.user, course_key)
     try:
-        response = staff_grading_service().get_problem_list(course_id, unique_id_for_user(request.user))
+        response = staff_grading_service().get_problem_list(course_key, unique_id_for_user(request.user))
 
         # If 'problem_list' is in the response, then we got a list of problems from the ORA server.
         # If it is not, then ORA could not find any problems.
@@ -318,13 +331,13 @@ def get_problem_list(request, course_id):
                 u'If not, please do so and return to this page.'
             )
         valid_problem_list = []
-        for i in xrange(0,len(problem_list)):
+        for i in xrange(0, len(problem_list)):
             # Needed to ensure that the 'location' key can be accessed.
             try:
                 problem_list[i] = json.loads(problem_list[i])
             except Exception:
                 pass
-            if does_location_exist(course_id, problem_list[i]['location']):
+            if does_location_exist(course_key.make_usage_key_from_deprecated_string(problem_list[i]['location'])):
                 valid_problem_list.append(problem_list[i])
         response['problem_list'] = valid_problem_list
         response = json.dumps(response)
@@ -372,7 +385,9 @@ def save_grade(request, course_id):
     Returns the same thing as get_next, except that additional error messages
     are possible if something goes wrong with saving the grade.
     """
-    _check_access(request.user, course_id)
+
+    course_key = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+    _check_access(request.user, course_key)
 
     if request.method != 'POST':
         raise Http404
@@ -395,10 +410,10 @@ def save_grade(request, course_id):
 
     grader_id = unique_id_for_user(request.user)
 
-    location = p['location']
+    location = course_key.make_usage_key_from_deprecated_string(p['location'])
 
     try:
-        result = staff_grading_service().save_grade(course_id,
+        result = staff_grading_service().save_grade(course_key,
                                                     grader_id,
                                                     p['submission_id'],
                                                     p['score'],

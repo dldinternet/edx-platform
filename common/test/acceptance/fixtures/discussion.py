@@ -30,6 +30,9 @@ class ContentFactory(factory.Factory):
 
 
 class Thread(ContentFactory):
+    thread_type = "discussion"
+    anonymous = False
+    anonymous_to_peers = False
     comments_count = 0
     unread_comments_count = 0
     title = "dummy thread title"
@@ -52,14 +55,47 @@ class Response(Comment):
     body = "dummy response body"
 
 
-class SingleThreadViewFixture(object):
+class SearchResult(factory.Factory):
+    FACTORY_FOR = dict
+    discussion_data = []
+    annotated_content_info = {}
+    num_pages = 1
+    page = 1
+    corrected_text = None
+
+
+class DiscussionContentFixture(object):
+
+    def push(self):
+        """
+        Push the data to the stub comments service.
+        """
+        requests.put(
+            '{}/set_config'.format(COMMENTS_STUB_URL),
+            data=self.get_config_data()
+        )
+
+    def get_config_data(self):
+        """
+        return a dictionary with the fixture's data serialized for PUTting to the stub server's config endpoint.
+        """
+        raise NotImplementedError()
+
+
+class SingleThreadViewFixture(DiscussionContentFixture):
 
     def __init__(self, thread):
         self.thread = thread
 
     def addResponse(self, response, comments=[]):
         response['children'] = comments
-        self.thread.setdefault('children', []).append(response)
+        if self.thread["thread_type"] == "discussion":
+            responseListAttr = "children"
+        elif response["endorsed"]:
+            responseListAttr = "endorsed_responses"
+        else:
+            responseListAttr = "non_endorsed_responses"
+        self.thread.setdefault(responseListAttr, []).append(response)
         self.thread['comments_count'] += len(comments) + 1
 
     def _get_comment_map(self):
@@ -76,30 +112,26 @@ class SingleThreadViewFixture(object):
             return res
         return dict(_visit(self.thread))
 
-    def push(self):
-        """
-        Push the data to the stub comments service.
-        """
-        requests.put(
-            '{}/set_config'.format(COMMENTS_STUB_URL),
-            data={
-                "threads": json.dumps({self.thread['id']: self.thread}),
-                "comments": json.dumps(self._get_comment_map())
-            }
-        )
+    def get_config_data(self):
+        return {
+            "threads": json.dumps({self.thread['id']: self.thread}),
+            "comments": json.dumps(self._get_comment_map())
+        }
 
-class UserProfileViewFixture(object):
+
+class UserProfileViewFixture(DiscussionContentFixture):
 
     def __init__(self, threads):
         self.threads = threads
 
-    def push(self):
-        """
-        Push the data to the stub comments service.
-        """
-        requests.put(
-            '{}/set_config'.format(COMMENTS_STUB_URL),
-            data={
-                "active_threads": json.dumps(self.threads),
-            }
-        )
+    def get_config_data(self):
+        return {"active_threads": json.dumps(self.threads)}
+
+
+class SearchResultFixture(DiscussionContentFixture):
+
+    def __init__(self, result):
+        self.result = result
+
+    def get_config_data(self):
+        return {"search_result": json.dumps(self.result)}

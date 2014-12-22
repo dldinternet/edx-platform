@@ -1,21 +1,28 @@
-# pylint: disable=E1103, E1101
+"""
+Common utility functions useful throughout the contentstore
+"""
+# pylint: disable=no-member
 
 import copy
 import logging
 import re
+from datetime import datetime
+from pytz import UTC
 
 from django.conf import settings
 from django.utils.translation import ugettext as _
+from django.core.urlresolvers import reverse
+from django_comment_common.models import assign_default_role
+from django_comment_common.utils import seed_permissions_roles
 
-from student.roles import CourseInstructorRole, CourseStaffRole
 from xmodule.contentstore.content import StaticContent
-from xmodule.contentstore.django import contentstore
-from xmodule.course_module import CourseDescriptor
-from xmodule.modulestore import Location
-from xmodule.modulestore.django import loc_mapper, modulestore
-from xmodule.modulestore.draft import DIRECT_ONLY_CATEGORIES
+from xmodule.modulestore import ModuleStoreEnum
+from xmodule.modulestore.django import modulestore
 from xmodule.modulestore.exceptions import ItemNotFoundError
-from xmodule.modulestore.store_utilities import delete_course
+from opaque_keys.edx.keys import UsageKey, CourseKey
+from student.roles import CourseInstructorRole, CourseStaffRole
+from student.models import CourseEnrollment
+from student import auth
 
 
 log = logging.getLogger(__name__)
@@ -26,205 +33,209 @@ NOTES_PANEL = {"name": _("My Notes"), "type": "notes"}
 EXTRA_TAB_PANELS = dict([(p['type'], p) for p in [OPEN_ENDED_PANEL, NOTES_PANEL]])
 
 
-def delete_course_and_groups(course_id, commit=False):
+def add_instructor(course_key, requesting_user, new_instructor):
     """
-    This deletes the courseware associated with a course_id as well as cleaning update_item
+    Adds given user as instructor and staff to the given course,
+    after verifying that the requesting_user has permission to do so.
+    """
+    # can't use auth.add_users here b/c it requires user to already have Instructor perms in this course
+    CourseInstructorRole(course_key).add_users(new_instructor)
+    auth.add_users(requesting_user, CourseStaffRole(course_key), new_instructor)
+
+
+def initialize_permissions(course_key, user_who_created_course):
+    """
+    Initializes a new course by enrolling the course creator as a student,
+    and initializing Forum by seeding its permissions and assigning default roles.
+    """
+    # seed the forums
+    seed_permissions_roles(course_key)
+
+    # auto-enroll the course creator in the course so that "View Live" will work.
+    CourseEnrollment.enroll(user_who_created_course, course_key)
+
+    # set default forum roles (assign 'Student' role)
+    assign_default_role(course_key, user_who_created_course)
+
+
+def remove_all_instructors(course_key):
+    """
+    Removes all instructor and staff users from the given course.
+    """
+    staff_role = CourseStaffRole(course_key)
+    staff_role.remove_users(*staff_role.users_with_role())
+    instructor_role = CourseInstructorRole(course_key)
+    instructor_role.remove_users(*instructor_role.users_with_role())
+
+
+def delete_course_and_groups(course_key, user_id):
+    """
+    This deletes the courseware associated with a course_key as well as cleaning update_item
     the various user table stuff (groups, permissions, etc.)
     """
-    module_store = modulestore('direct')
-    content_store = contentstore()
+    module_store = modulestore()
 
-    course_id_dict = Location.parse_course_id(course_id)
-    module_store.ignore_write_events_on_courses.append('{org}/{course}'.format(**course_id_dict))
-
-    loc = CourseDescriptor.id_to_location(course_id)
-    if delete_course(module_store, content_store, loc, commit):
+    with module_store.bulk_operations(course_key):
+        module_store.delete_course(course_key, user_id)
 
         print 'removing User permissions from course....'
         # in the django layer, we need to remove all the user permissions groups associated with this course
-        if commit:
-            try:
-                staff_role = CourseStaffRole(loc)
-                staff_role.remove_users(*staff_role.users_with_role())
-                instructor_role = CourseInstructorRole(loc)
-                instructor_role.remove_users(*instructor_role.users_with_role())
-            except Exception as err:
-                log.error("Error in deleting course groups for {0}: {1}".format(loc, err))
-
-            # remove location of this course from loc_mapper and cache
-            loc_mapper().delete_course_mapping(loc)
+        try:
+            remove_all_instructors(course_key)
+        except Exception as err:
+            log.error("Error in deleting course groups for {0}: {1}".format(course_key, err))
 
 
-def get_modulestore(category_or_location):
-    """
-    Returns the correct modulestore to use for modifying the specified location
-    """
-    if isinstance(category_or_location, Location):
-        category_or_location = category_or_location.category
-
-    if category_or_location in DIRECT_ONLY_CATEGORIES:
-        return modulestore('direct')
-    else:
-        return modulestore()
-
-
-def get_course_location_for_item(location):
-    '''
-    cdodge: for a given Xmodule, return the course that it belongs to
-    NOTE: This makes a lot of assumptions about the format of the course location
-    Also we have to assert that this module maps to only one course item - it'll throw an
-    assert if not
-    '''
-    item_loc = Location(location)
-
-    # check to see if item is already a course, if so we can skip this
-    if item_loc.category != 'course':
-        # @hack! We need to find the course location however, we don't
-        # know the 'name' parameter in this context, so we have
-        # to assume there's only one item in this query even though we are not specifying a name
-        course_search_location = Location('i4x', item_loc.org, item_loc.course, 'course', None)
-        courses = modulestore().get_items(course_search_location)
-
-        # make sure we found exactly one match on this above course search
-        found_cnt = len(courses)
-        if found_cnt == 0:
-            raise Exception('Could not find course at {0}'.format(course_search_location))
-
-        if found_cnt > 1:
-            raise Exception('Found more than one course at {0}. There should only be one!!! Dump = {1}'.format(course_search_location, courses))
-
-        location = courses[0].location
-
-    return location
-
-
-def get_course_for_item(location):
-    '''
-    cdodge: for a given Xmodule, return the course that it belongs to
-    NOTE: This makes a lot of assumptions about the format of the course location
-    Also we have to assert that this module maps to only one course item - it'll throw an
-    assert if not
-    '''
-    item_loc = Location(location)
-
-    # @hack! We need to find the course location however, we don't
-    # know the 'name' parameter in this context, so we have
-    # to assume there's only one item in this query even though we are not specifying a name
-    course_search_location = Location('i4x', item_loc.org, item_loc.course, 'course', None)
-    courses = modulestore().get_items(course_search_location)
-
-    # make sure we found exactly one match on this above course search
-    found_cnt = len(courses)
-    if found_cnt == 0:
-        raise BaseException('Could not find course at {0}'.format(course_search_location))
-
-    if found_cnt > 1:
-        raise BaseException('Found more than one course at {0}. There should only be one!!! Dump = {1}'.format(course_search_location, courses))
-
-    return courses[0]
-
-
-def get_lms_link_for_item(location, preview=False, course_id=None):
+def get_lms_link_for_item(location, preview=False):
     """
     Returns an LMS link to the course with a jump_to to the provided location.
 
     :param location: the location to jump to
     :param preview: True if the preview version of LMS should be returned. Default value is false.
-    :param course_id: the course_id within which the location lives. If not specified, the course_id is obtained
-           by calling Location(location).course_id; note that this only works for locations representing courses
-           instead of elements within courses.
     """
-    if course_id is None:
-        course_id = Location(location).course_id
+    assert(isinstance(location, UsageKey))
 
-    if settings.LMS_BASE is not None:
-        if preview:
-            lms_base = settings.FEATURES.get('PREVIEW_LMS_BASE')
-        else:
-            lms_base = settings.LMS_BASE
+    if settings.LMS_BASE is None:
+        return None
 
-        lms_link = u"//{lms_base}/courses/{course_id}/jump_to/{location}".format(
-            lms_base=lms_base,
-            course_id=course_id,
-            location=Location(location)
-        )
+    if preview:
+        lms_base = settings.FEATURES.get('PREVIEW_LMS_BASE')
     else:
-        lms_link = None
+        lms_base = settings.LMS_BASE
 
-    return lms_link
+    return u"//{lms_base}/courses/{course_key}/jump_to/{location}".format(
+        lms_base=lms_base,
+        course_key=location.course_key.to_deprecated_string(),
+        location=location.to_deprecated_string(),
+    )
 
 
-def get_lms_link_for_about_page(location):
+def get_lms_link_for_about_page(course_key):
     """
     Returns the url to the course about page from the location tuple.
     """
+
+    assert(isinstance(course_key, CourseKey))
+
     if settings.FEATURES.get('ENABLE_MKTG_SITE', False):
         if not hasattr(settings, 'MKTG_URLS'):
             log.exception("ENABLE_MKTG_SITE is True, but MKTG_URLS is not defined.")
-            about_base = None
-        else:
-            marketing_urls = settings.MKTG_URLS
-            if marketing_urls.get('ROOT', None) is None:
-                log.exception('There is no ROOT defined in MKTG_URLS')
-                about_base = None
-            else:
-                # Root will be "https://www.edx.org". The complete URL will still not be exactly correct,
-                # but redirects exist from www.edx.org to get to the Drupal course about page URL.
-                about_base = marketing_urls.get('ROOT')
-                # Strip off https:// (or http://) to be consistent with the formatting of LMS_BASE.
-                about_base = re.sub(r"^https?://", "", about_base)
+            return None
+
+        marketing_urls = settings.MKTG_URLS
+
+        # Root will be "https://www.edx.org". The complete URL will still not be exactly correct,
+        # but redirects exist from www.edx.org to get to the Drupal course about page URL.
+        about_base = marketing_urls.get('ROOT', None)
+
+        if about_base is None:
+            log.exception('There is no ROOT defined in MKTG_URLS')
+            return None
+
+        # Strip off https:// (or http://) to be consistent with the formatting of LMS_BASE.
+        about_base = re.sub(r"^https?://", "", about_base)
+
     elif settings.LMS_BASE is not None:
         about_base = settings.LMS_BASE
     else:
-        about_base = None
+        return None
 
-    if about_base is not None:
-        lms_link = u"//{about_base_url}/courses/{course_id}/about".format(
-            about_base_url=about_base,
-            course_id=Location(location).course_id
-        )
-    else:
-        lms_link = None
-
-    return lms_link
+    return u"//{about_base_url}/courses/{course_key}/about".format(
+        about_base_url=about_base,
+        course_key=course_key.to_deprecated_string()
+    )
 
 
 def course_image_url(course):
     """Returns the image url for the course."""
-    loc = StaticContent.compute_location(course.location.org, course.location.course, course.course_image)
-    path = StaticContent.get_url_path_from_location(loc)
+    loc = StaticContent.compute_location(course.location.course_key, course.course_image)
+    path = StaticContent.serialize_asset_key_with_slash(loc)
     return path
 
 
-class PublishState(object):
+# pylint: disable=invalid-name
+def is_currently_visible_to_students(xblock):
     """
-    The publish state for a given xblock-- either 'draft', 'private', or 'public'.
-
-    Currently in CMS, an xblock can only be in 'draft' or 'private' if it is at or below the Unit level.
-    """
-    draft = 'draft'
-    private = 'private'
-    public = 'public'
-
-
-def compute_publish_state(xblock):
-    """
-    Returns whether this xblock is 'draft', 'public', or 'private'.
-
-    'draft' content is in the process of being edited, but still has a previous
-        version visible in the LMS
-    'public' content is locked and visible in the LMS
-    'private' content is editable and not visible in the LMS
+    Returns true if there is a published version of the xblock that is currently visible to students.
+    This means that it has a release date in the past, and the xblock has not been set to staff only.
     """
 
-    if getattr(xblock, 'is_draft', False):
-        try:
-            modulestore('direct').get_item(xblock.location)
-            return PublishState.draft
-        except ItemNotFoundError:
-            return PublishState.private
+    try:
+        published = modulestore().get_item(xblock.location, revision=ModuleStoreEnum.RevisionOption.published_only)
+    # If there's no published version then the xblock is clearly not visible
+    except ItemNotFoundError:
+        return False
+
+    # If visible_to_staff_only is True, this xblock is not visible to students regardless of start date.
+    if published.visible_to_staff_only:
+        return False
+
+    # Check start date
+    if 'detached' not in published._class_tags and published.start is not None:
+        return datetime.now(UTC) > published.start
+
+    # No start date, so it's always visible
+    return True
+
+
+def find_release_date_source(xblock):
+    """
+    Finds the ancestor of xblock that set its release date.
+    """
+
+    # Stop searching at the section level
+    if xblock.category == 'chapter':
+        return xblock
+
+    parent_location = modulestore().get_parent_location(xblock.location,
+                                                        revision=ModuleStoreEnum.RevisionOption.draft_preferred)
+    # Orphaned xblocks set their own release date
+    if not parent_location:
+        return xblock
+
+    parent = modulestore().get_item(parent_location)
+    if parent.start != xblock.start:
+        return xblock
     else:
-        return PublishState.public
+        return find_release_date_source(parent)
+
+
+def find_staff_lock_source(xblock):
+    """
+    Returns the xblock responsible for setting this xblock's staff lock, or None if the xblock is not staff locked.
+    If this xblock is explicitly locked, return it, otherwise find the ancestor which sets this xblock's staff lock.
+    """
+
+    # Stop searching if this xblock has explicitly set its own staff lock
+    if xblock.fields['visible_to_staff_only'].is_set_on(xblock):
+        return xblock
+
+    # Stop searching at the section level
+    if xblock.category == 'chapter':
+        return None
+
+    parent_location = modulestore().get_parent_location(xblock.location,
+                                                        revision=ModuleStoreEnum.RevisionOption.draft_preferred)
+    # Orphaned xblocks set their own staff lock
+    if not parent_location:
+        return None
+
+    parent = modulestore().get_item(parent_location)
+    return find_staff_lock_source(parent)
+
+
+def ancestor_has_staff_lock(xblock, parent_xblock=None):
+    """
+    Returns True iff one of xblock's ancestors has staff lock.
+    Can avoid mongo query by passing in parent_xblock.
+    """
+    if parent_xblock is None:
+        parent_location = modulestore().get_parent_location(xblock.location,
+                                                            revision=ModuleStoreEnum.RevisionOption.draft_preferred)
+        if not parent_location:
+            return False
+        parent_xblock = modulestore().get_item(parent_location)
+    return parent_xblock.visible_to_staff_only
 
 
 def add_extra_panel_tab(tab_type, course):
@@ -265,3 +276,28 @@ def remove_extra_panel_tab(tab_type, course):
         course_tabs = [ct for ct in course_tabs if ct != tab_panel]
         changed = True
     return changed, course_tabs
+
+
+def reverse_url(handler_name, key_name=None, key_value=None, kwargs=None):
+    """
+    Creates the URL for the given handler.
+    The optional key_name and key_value are passed in as kwargs to the handler.
+    """
+    kwargs_for_reverse = {key_name: unicode(key_value)} if key_name else None
+    if kwargs:
+        kwargs_for_reverse.update(kwargs)
+    return reverse('contentstore.views.' + handler_name, kwargs=kwargs_for_reverse)
+
+
+def reverse_course_url(handler_name, course_key, kwargs=None):
+    """
+    Creates the URL for handlers that use course_keys as URL parameters.
+    """
+    return reverse_url(handler_name, 'course_key_string', course_key, kwargs)
+
+
+def reverse_usage_url(handler_name, usage_key, kwargs=None):
+    """
+    Creates the URL for handlers that use usage_keys as URL parameters.
+    """
+    return reverse_url(handler_name, 'usage_key_string', usage_key, kwargs)

@@ -27,7 +27,7 @@ the unit under tests into smaller units, and then testing those individually.
 We use [voidspace mock](http://www.voidspace.org.uk/python/mock/).
 
 * We unit test Python code (using [unittest](http://docs.python.org/2/library/unittest.html)) and
-Javascript (using [Jasmine](http://pivotal.github.io/jasmine/))
+Javascript (using [Jasmine](http://jasmine.github.io/))
 
 ### Integration Tests
 * Test several units at the same time.
@@ -51,8 +51,8 @@ to simulate HTTP requests to the server.
 these tests simulate user interactions through the browser using
 [splinter](http://splinter.cobrateam.info/).
 
-* We use [Bok Choy](http://bok-choy.readthedocs.org/en/latest/tutorial.html) to 
-write end-user acceptance tests directly in Python, using the framework to 
+* We use [Bok Choy](http://bok-choy.readthedocs.org/en/latest/tutorial.html) to
+write end-user acceptance tests directly in Python, using the framework to
 maximize reliability and maintainability.
 
 ## Test Locations
@@ -93,7 +93,7 @@ because the `capa` package handles problem XML.
 
 You can run all of the unit-level tests using the command
 
-    rake test
+    paver test
 
 This includes python, javascript, and documentation tests. It does not, however,
 run any acceptance tests.
@@ -104,44 +104,58 @@ We use [nose](https://nose.readthedocs.org/en/latest/) through
 the [django-nose plugin](https://pypi.python.org/pypi/django-nose)
 to run the test suite.
 
-You can run all the python tests using `rake` commands.  For example,
+You can run all the python tests using `paver` commands.  For example,
 
-    rake test:python
+    paver test_python
 
 runs all the tests.  It also runs `collectstatic`, which prepares the static files used by the site (for example, compiling Coffeescript to Javascript).
 
 You can re-run all failed python tests by running: (see note at end of section)
 
-    rake test:python[--failed]
+    paver test_python --failed
 
-You can also run the tests without `collectstatic`, which tends to be faster:
+To test lms or cms python, use:
 
-    rake fasttest_lms
+    paver test_system -s lms
 
 or
 
-    rake fasttest_cms
+    paver test_system -s cms
 
-xmodule can be tested independently, with this:
+You can also run these tests without `collectstatic`, which is faster:
 
-    rake test_common/lib/xmodule
+    paver test_system -s lms --fasttest
 
-other module level tests include
+or
 
-* `rake test_common/lib/capa`
-* `rake test_common/lib/calc`
+    paver test_system -s cms --fasttest
 
 To run a single django test class:
 
-    rake test_lms[lms/djangoapps/courseware/tests/tests.py:ActivateLoginTest]
+    paver test_system -t lms/djangoapps/courseware/tests/tests.py:ActivateLoginTest
+
+When developing tests, it is often helpful to be able to really just run one single test without the overhead of PIP installs, UX builds, etc. In this case, it is helpful to look at the output of paver, and run just the specific command (optionally, stripping away coverage metrics). At the time of this writing, the command is:
+
+    python ./manage.py lms test --verbosity=1 lms/djangoapps/courseware/tests/test_courses.py   --traceback --settings=test
 
 To run a single django test:
 
-    rake test_lms[lms/djangoapps/courseware/tests/tests.py:ActivateLoginTest.test_activate_login]
+    paver test_system -t lms/djangoapps/courseware/tests/tests.py:ActivateLoginTest.test_activate_login
 
-To re-run all failing django tests from lms or cms: (see note at end of section)
+To re-run all failing django tests from lms or cms, use the `--failed`,`-f` flag (see note at end of section)
 
-    rake test_lms[--failed]
+    paver test_system -s lms --failed
+    paver test_system -s cms --failed
+
+There is also a `--fail_fast`, `-x` option that will stop nosetests after the first failure.
+
+common/lib tests are tested with the `test_lib` task, which also accepts the `--failed` and `--fail_fast` options. For example:
+
+    paver test_lib -l common/lib/calc
+
+or
+
+    paver test_lib -l common/lib/xmodule --failed
 
 To run a single nose test file:
 
@@ -174,7 +188,7 @@ To run tests for stub servers, for example for
 [YouTube stub server](https://github.com/edx/edx-platform/blob/master/common/djangoapps/terrain/stubs/tests/test_youtube_stub.py),
 you can do one of:
 
-    rake fasttest_cms[common/djangoapps/terrain/stubs/tests/test_youtube_stub.py]
+    paver test_system -s cms -t common/djangoapps/terrain/stubs/tests/test_youtube_stub.py
     python -m coverage run --rcfile=cms/.coveragerc `which ./manage.py` cms --settings test test --traceback common/djangoapps/terrain/stubs/tests/test_youtube_stub.py
 
 
@@ -183,30 +197,35 @@ Very handy: if you uncomment the `pdb=1` line in `setup.cfg`, it will drop you i
 
 Note: More on the `--failed` functionality
 * In order to use this, you must run the tests first. If you haven't already run the tests, or if no tests failed in the previous run, then using the `--failed` switch will result in **all** of the tests being run.  See more about this in the [nose documentation](http://nose.readthedocs.org/en/latest/plugins/testid.html#looping-over-failed-tests).
-* Note that `rake test:python` calls nosetests separately for cms and lms. This means that if tests failed only in lms on the previous run, then calling `rake test:python[--failed]` will run **all of the tests for cms** in addition to the previously failing lms tests. If you want it to run only the failing tests for lms or cms, use the `rake test_lms[--failed]` or `rake test_cms[--failed]` commands. 
+* Note that `paver test_python` calls nosetests separately for cms and lms. This means that if tests failed only in lms on the previous run, then calling `paver test_python --failed` will run **all of the tests for cms** in addition to the previously failing lms tests. If you want it to run only the failing tests for lms or cms, use the `paver test_system -s lms --failed` or `paver test_system -s cms --failed` commands.
 
 
 ### Running Javascript Unit Tests
 
 We use Jasmine to run JavaScript unit tests.  To run all the JavaScript tests:
 
-    rake test:js
+    paver test_js
 
 To run a specific set of JavaScript tests and print the results to the console:
 
-    rake test:js:run[lms]
-    rake test:js:run[cms]
-    rake test:js:run[xmodule]
-    rake test:js:run[common]
+    paver test_js_run -s lms
+    paver test_js_run -s lms-coffee
+    paver test_js_run -s cms
+    paver test_js_run -s cms-squire
+    paver test_js_run -s xmodule
+    paver test_js_run -s common
 
 To run JavaScript tests in your default browser:
 
-    rake test:js:dev[lms]
-    rake test:js:dev[cms]
-    rake test:js:dev[xmodule]
-    rake test:js:dev[common]
+    paver test_js_dev -s lms
+    paver test_js_dev -s lms-coffee
+    paver test_js_dev -s cms
+    paver test_js_dev -s cms-squire
+    paver test_js_dev -s xmodule
+    paver test_js_dev -s common
 
-These rake commands call through to a custom test runner.  For more info, see [js-test-tool](https://github.com/edx/js-test-tool).
+
+These paver commands call through to a custom test runner.  For more info, see [js-test-tool](https://github.com/edx/js-test-tool).
 
 
 ### Running Bok Choy Acceptance Tests
@@ -215,8 +234,8 @@ We use [Bok Choy](http://bok-choy.readthedocs.org/en/latest/tutorial.html) for a
 Bok Choy is a UI-level acceptance test framework for writing robust [Selenium](http://docs.seleniumhq.org/) tests in [Python](https://www.python.org/).
 Bok Choy makes your acceptance tests reliable and maintainable by utilizing the Page Object and Promise design patterns.
 
-**Prerequisites**: 
-* These prerequisites are all automatically installed and available in [Devstack](https://github.com/edx/configuration/wiki/edX-Developer-Stack), 
+**Prerequisites**:
+* These prerequisites are all automatically installed and available in [Devstack](https://github.com/edx/configuration/wiki/edX-Developer-Stack),
 the supported development enviornment for the edX Platform.
 * Chromedriver and Chrome (see Running Lettuce Acceptance Tests below for the latest tested versions)
 * Mongo
@@ -226,29 +245,33 @@ the supported development enviornment for the edX Platform.
 
 To run all the bok choy acceptance tests:
 
-    rake test:bok_choy
+    paver test_bokchoy
 
-Once the database has been set up and the static files collected, you can use the 'fast' 
+Once the database has been set up and the static files collected, you can use the 'fast'
 option to skip those tasks. This option can also be used with any of the test specs below:
 
-    rake test:bok_choy:fast
+    paver test_bokchoy --fasttest
 
-To run single test, specify the name of the test file. For example:
+To run a single test, specify the name of the test file. For example:
 
-    rake test:bok_choy[test_lms.py]
+    paver test_bokchoy -t lms/test_lms.py
 
-To run single test faster by not repeating setup tasks:
+Notice the test file location is relative to common/test/acceptance/tests. For example:
 
-    rake test:bok_choy:fast[test_lms.py]
+    paver test_bokchoy -t studio/test_studio_bad_data.py
+
+To run a single test faster by not repeating setup tasks:
+
+    paver test_bokchoy -t studio/test_studio_bad_data.py --fasttest
 
 To test only a certain feature, specify the file and the testcase class:
 
-    rake test:bok_choy:fast[test_lms.py:RegistrationTest]
+    paver test_bokchoy -t studio/test_studio_bad_data.py:BadComponentTest
 
-To execute only a certain test case, specify the file name, class, and 
+To execute only a certain test case, specify the file name, class, and
 test case method:
 
-    rake test:bok_choy:fast[test_lms.py:RegistrationTest.test_register]
+    paver test_bokchoy -t lms/test_lms.py:RegistrationTest.test_register
 
 During acceptance test execution, log files and also screenshots of failed tests
 are captured in test_root/log.
@@ -256,6 +279,14 @@ are captured in test_root/log.
 To put a debugging breakpoint in a test use:
 
     from nose.tools import set_trace; set_trace()
+
+By default, all bokchoy tests are run with the 'split' ModuleStore.
+To override the modulestore that is used, use the default_store option.  The currently supported stores are:
+    'split' (xmodule.modulestore.split_mongo.split_draft.DraftVersioningModuleStore) and
+    'draft' (xmodule.modulestore.mongo.DraftMongoModuleStore).
+For example:
+
+    paver test_bokchoy --default_store='draft'
 
 
 ### Running Lettuce Acceptance Tests
@@ -270,29 +301,37 @@ installed to run the tests in Chrome.  The tests are confirmed to run
 with Chrome (not Chromium) version 34.0.1847.116 with ChromeDriver version 2.6.232917.
 
 To run all the acceptance tests:
-    rake test:acceptance
+    paver test_acceptance
 
 To run only for lms or cms:
 
-    rake test:acceptance:lms
-    rake test:acceptance:cms
+    paver test_acceptance -s lms
+    paver test_acceptance -s cms
 
 To test only a specific feature:
 
-    rake test:acceptance:lms["lms/djangoapps/courseware/features/problems.feature"]
+    paver test_acceptance -s lms --extra_args="lms/djangoapps/courseware/features/problems.feature"
 
 To test only a specific scenario
 
-    rake test:acceptance:lms["lms/djangoapps/courseware/features/problems.feature -s 3"]
+    paver test_acceptance -s lms --extra_args="lms/djangoapps/courseware/features/problems.feature -s 3"
 
-To start the debugger on failure, add the `--pdb` option:
+To start the debugger on failure, add the `--pdb` option to extra_args:
 
-    rake test:acceptance:lms["lms/djangoapps/courseware/features/problems.feature --pdb"]
+    paver test_acceptance -s lms --extra_args="lms/djangoapps/courseware/features/problems.feature --pdb"
 
 To run tests faster by not collecting static files, you can use
-`rake test:acceptance:lms:fast` and `rake test:acceptance:cms:fast`.
+`paver test_acceptance -s lms --fasttest` and `paver test_acceptance -s cms --fasttest`.
 
-Acceptance tests will run on a randomized port and can be run in the background of rake cms and lms or unit tests.
+By default, all acceptance tests are run with the 'draft' ModuleStore.
+To override the modulestore that is used, use the default_store option. Currently, the possible stores for acceptance tests are:
+    'split' (xmodule.modulestore.split_mongo.split_draft.DraftVersioningModuleStore) and
+    'draft' (xmodule.modulestore.mongo.DraftMongoModuleStore).
+For example:
+    paver test_acceptance --default_store='draft'
+Note, however, all acceptance tests currently do not pass with 'split'.
+
+Acceptance tests will run on a randomized port and can be run in the background of paver cms and lms or unit tests.
 To specify the port, change the LETTUCE_SERVER_PORT constant in cms/envs/acceptance.py and lms/envs/acceptance.py
 as well as the port listed in cms/djangoapps/contentstore/feature/upload.py
 
@@ -334,14 +373,41 @@ To view test coverage:
 
 1. Run the test suite:
 
-        rake test
+        paver test
 
 2. Generate reports:
 
-        rake coverage
+        paver coverage
 
 3. Reports are located in the `reports` folder.  The command
 generates HTML and XML (Cobertura format) reports.
+
+
+## Code Style Quality
+
+To view code style quality (including pep8 and pylint violations):
+
+    paver run_quality
+
+More specific options are below.
+
+* Running a particular quality report:
+
+		paver run_pep8
+		paver run_pylint
+
+* Running a report, and setting it to fail if it exceeds a given number of violations:
+
+		paver run_pep8 --limit=800
+
+* The `run_quality` uses the underlying diff-quality tool (which is packaged with [diff-cover](https://github.com/edx/diff-cover)). With that, the command can be set to fail if a certain diff threshold is not met. For example, to cause the process to fail if  quality expectations are less than 100% when compared to master (or in other words, if style quality is worse than what's already on master):
+
+		paver run_quality --percentage=100
+
+* Note that 'fixme' violations are not counted with run_quality. To see all 'TODO' lines, use:
+
+		paver find_fixme --system=lms
+`system` is an optional argument here. It defaults to `cms,lms,common`.
 
 
 ## Testing using queue servers

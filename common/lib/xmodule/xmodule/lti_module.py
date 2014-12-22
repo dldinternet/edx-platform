@@ -75,6 +75,9 @@ from xblock.fields import Boolean, Float
 
 log = logging.getLogger(__name__)
 
+# Make '_' a no-op so we can scrape strings
+_ = lambda text: text
+
 DOCS_ANCHOR_TAG = (
     "<a target='_blank'"
     "href='http://edx.readthedocs.org/projects/ca/en/latest/exercises_tools/lti_component.html'>"
@@ -103,8 +106,8 @@ class LTIFields(object):
     https://github.com/idan/oauthlib/blob/master/oauthlib/oauth1/rfc5849/signature.py#L136
     """
     display_name = String(
-        display_name="Display Name",
-        help=(
+        display_name=_("Display Name"),
+        help=_(
             "Enter the name that students see for this component.  "
             "Analytics reports may also use the display name to identify this component."
         ),
@@ -112,8 +115,8 @@ class LTIFields(object):
         default="LTI",
     )
     lti_id = String(
-        display_name="LTI ID",
-        help=(
+        display_name=_("LTI ID"),
+        help=_(
             "Enter the LTI ID for the external LTI provider.  "
             "This value must be the same LTI ID that you entered in the "
             "LTI Passports setting on the Advanced Settings page."
@@ -123,8 +126,8 @@ class LTIFields(object):
         scope=Scope.settings
     )
     launch_url = String(
-        display_name="LTI URL",
-        help=(
+        display_name=_("LTI URL"),
+        help=_(
             "Enter the URL of the external tool that this component launches. "
             "This setting is only used when Hide External Tool is set to False."
             "<br />See " + DOCS_ANCHOR_TAG + " for more details on this setting."
@@ -132,16 +135,16 @@ class LTIFields(object):
         default='http://www.example.com',
         scope=Scope.settings)
     custom_parameters = List(
-        display_name="Custom Parameters",
-        help=(
+        display_name=_("Custom Parameters"),
+        help=_(
             "Add the key/value pair for any custom parameters, such as the page your e-book should open to or "
             "the background color for this component."
             "<br />See " + DOCS_ANCHOR_TAG + " for more details on this setting."
         ),
         scope=Scope.settings)
     open_in_a_new_page = Boolean(
-        display_name="Open in New Page",
-        help=(
+        display_name=_("Open in New Page"),
+        help=_(
             "Select True if you want students to click a link that opens the LTI tool in a new window. "
             "Select False if you want the LTI content to open in an IFrame in the current page. "
             "This setting is only used when Hide External Tool is set to False.  "
@@ -150,16 +153,16 @@ class LTIFields(object):
         scope=Scope.settings
     )
     has_score = Boolean(
-        display_name="Scored",
-        help=(
+        display_name=_("Scored"),
+        help=_(
             "Select True if this component will receive a numerical score from the external LTI system."
         ),
         default=False,
         scope=Scope.settings
     )
     weight = Float(
-        display_name="Weight",
-        help=(
+        display_name=_("Weight"),
+        help=_(
             "Enter the number of points possible for this component.  "
             "The default value is 1.0.  "
             "This setting is only used when Scored is set to True."
@@ -169,23 +172,65 @@ class LTIFields(object):
         values={"min": 0},
     )
     module_score = Float(
-        help="The score kept in the xblock KVS -- duplicate of the published score in django DB",
+        help=_("The score kept in the xblock KVS -- duplicate of the published score in django DB"),
         default=None,
         scope=Scope.user_state
     )
     score_comment = String(
-        help="Comment as returned from grader, LTI2.0 spec",
+        help=_("Comment as returned from grader, LTI2.0 spec"),
         default="",
         scope=Scope.user_state
     )
     hide_launch = Boolean(
-        display_name="Hide External Tool",
-        help=(
+        display_name=_("Hide External Tool"),
+        help=_(
             "Select True if you want to use this component as a placeholder for syncing with an external grading  "
             "system rather than launch an external tool.  "
             "This setting hides the Launch button and any IFrames for this component."
         ),
         default=False,
+        scope=Scope.settings
+    )
+
+    # Users will be presented with a message indicating that their e-mail/username would be sent to a third
+    # party application. When "Open in New Page" is not selected, the tool automatically appears without any user action.
+    ask_to_send_username = Boolean(
+        display_name=_("Request user's username"),
+        # Translators: This is used to request the user's username for a third party service.
+        # Usernames can only be requested if "Open in New Page" is set to True.
+        help=_(
+            "Select True to request the user's username. You must also set Open in New Page to True to get the user's information."
+        ),
+        default=False,
+        scope=Scope.settings
+    )
+    ask_to_send_email = Boolean(
+        display_name=_("Request user's email"),
+        # Translators: This is used to request the user's email for a third party service.
+        # Emails can only be requested if "Open in New Page" is set to True.
+        help=_(
+            "Select True to request the user's email address. You must also set Open in New Page to True to get the user's information."
+        ),
+        default=False,
+        scope=Scope.settings
+    )
+
+    description = String(
+        display_name=_("LTI Application Information"),
+        help=_(
+            "Enter a description of the third party application. If requesting username and/or email, use this text box to inform users "
+            "why their username and/or email will be forwarded to a third party application."
+        ),
+        default="",
+        scope=Scope.settings
+    )
+
+    button_text = String(
+        display_name=_("Button Text"),
+        help=_(
+            "Enter the text on the button used to launch the third party application."
+        ),
+        default="",
         scope=Scope.settings
     )
 
@@ -271,7 +316,13 @@ class LTIModule(LTIFields, LTI20ModuleMixin, XModule):
         Otherwise error message from LTI provider is generated.
     """
 
+    js = {
+        'js': [
+            resource_string(__name__, 'js/src/lti/lti.js')
+        ]
+    }
     css = {'scss': [resource_string(__name__, 'css/lti/lti.scss')]}
+    js_module_name = "LTI"
 
     def get_input_fields(self):
         # LTI provides a list of default parameters that might be passed as
@@ -314,6 +365,7 @@ class LTIModule(LTIFields, LTI20ModuleMixin, XModule):
 
         # parsing custom parameters to dict
         custom_parameters = {}
+
         for custom_parameter in self.custom_parameters:
             try:
                 param_name, param_value = [p.strip() for p in custom_parameter.split('=', 1)]
@@ -367,6 +419,11 @@ class LTIModule(LTIFields, LTI20ModuleMixin, XModule):
             'weight': self.weight,
             'module_score': self.module_score,
             'comment': sanitized_comment,
+            'description': self.description,
+            'ask_to_send_username': self.ask_to_send_username,
+            'ask_to_send_email': self.ask_to_send_email,
+            'button_text': self.button_text,
+
         }
 
     def get_html(self):
@@ -453,9 +510,7 @@ class LTIModule(LTIFields, LTI20ModuleMixin, XModule):
         """
         Return course by course id.
         """
-        course_location = CourseDescriptor.id_to_location(self.course_id)
-        course = self.descriptor.runtime.modulestore.get_item(course_location)
-        return course
+        return self.descriptor.runtime.modulestore.get_course(self.course_id)
 
     @property
     def context_id(self):
@@ -465,7 +520,7 @@ class LTIModule(LTIFields, LTI20ModuleMixin, XModule):
         context_id is an opaque identifier that uniquely identifies the context (e.g., a course)
         that contains the link being launched.
         """
-        return self.course_id
+        return self.course_id.to_deprecated_string()
 
     @property
     def role(self):
@@ -514,6 +569,29 @@ class LTIModule(LTIFields, LTI20ModuleMixin, XModule):
             body.update({
                 u'lis_outcome_service_url': self.get_outcome_service_url()
             })
+
+        self.user_email = ""
+        self.user_username = ""
+
+        # Username and email can't be sent in studio mode, because the user object is not defined.
+        # To test functionality test in LMS
+
+        if callable(self.runtime.get_real_user):
+            real_user_object = self.runtime.get_real_user(self.runtime.anonymous_student_id)
+            try:
+                self.user_email = real_user_object.email
+            except AttributeError:
+                self.user_email = ""
+            try:
+                self.user_username = real_user_object.username
+            except AttributeError:
+                self.user_username = ""
+
+        if self.open_in_a_new_page:
+            if self.ask_to_send_username and self.user_username:
+                body["lis_person_sourcedid"] = self.user_username
+            if self.ask_to_send_email and self.user_email:
+                body["lis_person_contact_email_primary"] = self.user_email
 
         # Appending custom parameter for signing.
         body.update(custom_parameters)
@@ -674,7 +752,6 @@ oauth_consumer_key="", oauth_signature="frVp4JuvT1mVXlxktiAUjQ7%2F1cw%3D"'}
         log.debug("[LTI]: Incorrect action.")
         return Response(response_xml_template.format(**unsupported_values), content_type='application/xml')
 
-
     @classmethod
     def parse_grade_xml_body(cls, body):
         """
@@ -693,10 +770,10 @@ oauth_consumer_key="", oauth_signature="frVp4JuvT1mVXlxktiAUjQ7%2F1cw%3D"'}
         parser = etree.XMLParser(ns_clean=True, recover=True, encoding='utf-8')
         root = etree.fromstring(data, parser=parser)
 
-        imsx_messageIdentifier = root.xpath("//def:imsx_messageIdentifier", namespaces=namespaces)[0].text
+        imsx_messageIdentifier = root.xpath("//def:imsx_messageIdentifier", namespaces=namespaces)[0].text or ''
         sourcedId = root.xpath("//def:sourcedId", namespaces=namespaces)[0].text
         score = root.xpath("//def:textString", namespaces=namespaces)[0].text
-        action = root.xpath("//def:imsx_POXBody", namespaces=namespaces)[0].getchildren()[0].tag.replace('{'+lti_spec_namespace+'}', '')
+        action = root.xpath("//def:imsx_POXBody", namespaces=namespaces)[0].getchildren()[0].tag.replace('{' + lti_spec_namespace + '}', '')
         # Raise exception if score is not float or not in range 0.0-1.0 regarding spec.
         score = float(score)
         if not 0 <= score <= 1:
@@ -732,18 +809,39 @@ oauth_consumer_key="", oauth_signature="frVp4JuvT1mVXlxktiAUjQ7%2F1cw%3D"'}
         oauth_params = signature.collect_parameters(headers=headers, exclude_oauth_signature=False)
         oauth_headers = dict(oauth_params)
         oauth_signature = oauth_headers.pop('oauth_signature')
-        mock_request = mock.Mock(
+        mock_request_lti_1 = mock.Mock(
+            uri=unicode(urllib.unquote(self.get_outcome_service_url())),
+            http_method=unicode(request.method),
+            params=oauth_headers.items(),
+            signature=oauth_signature
+        )
+        mock_request_lti_2 = mock.Mock(
             uri=unicode(urllib.unquote(request.url)),
             http_method=unicode(request.method),
             params=oauth_headers.items(),
             signature=oauth_signature
         )
-
         if oauth_body_hash != oauth_headers.get('oauth_body_hash'):
+            log.error(
+                "OAuth body hash verification failed, provided: {}, "
+                "calculated: {}, for url: {}, body is: {}".format(
+                    oauth_headers.get('oauth_body_hash'),
+                    oauth_body_hash,
+                    self.get_outcome_service_url(),
+                    request.body
+                )
+            )
             raise LTIError("OAuth body hash verification is failed.")
 
-        if not signature.verify_hmac_sha1(mock_request, client_secret):
-            raise LTIError("OAuth signature verification is failed.")
+        if (not signature.verify_hmac_sha1(mock_request_lti_1, client_secret) and not
+                signature.verify_hmac_sha1(mock_request_lti_2, client_secret)):
+            log.error("OAuth signature verification failed, for "
+                      "headers:{} url:{} method:{}".format(
+                          oauth_headers,
+                          self.get_outcome_service_url(),
+                          unicode(request.method)
+                      ))
+            raise LTIError("OAuth signature verification has failed.")
 
     def get_client_key_secret(self):
         """
@@ -763,6 +861,7 @@ oauth_consumer_key="", oauth_signature="frVp4JuvT1mVXlxktiAUjQ7%2F1cw%3D"'}
             if lti_id == self.lti_id.strip():
                 return key, secret
         return '', ''
+
 
 class LTIDescriptor(LTIFields, MetadataOnlyEditingDescriptor, EmptyDataRawDescriptor):
     """

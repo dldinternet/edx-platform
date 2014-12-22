@@ -1,5 +1,6 @@
-define(["jquery", "underscore", "backbone", "js/utils/handle_iframe_binding"],
-    function ($, _, Backbone, IframeUtils) {
+define(["jquery", "underscore", "backbone", "gettext", "js/utils/handle_iframe_binding", "js/utils/templates",
+        "js/views/utils/view_utils"],
+    function ($, _, Backbone, gettext, IframeUtils, TemplateUtils, ViewUtils) {
         /*
          This view is extended from backbone to provide useful functionality for all Studio views.
          This functionality includes:
@@ -13,6 +14,13 @@ define(["jquery", "underscore", "backbone", "js/utils/handle_iframe_binding"],
         var BaseView = Backbone.View.extend({
             events: {
                 "click .ui-toggle-expansion": "toggleExpandCollapse"
+            },
+
+            options: {
+                // UX is moving towards using 'is-collapsed' in preference over 'collapsed',
+                // but use the old scheme as the default so that existing code doesn't need
+                // to be rewritten.
+                collapsedClass: 'collapsed'
             },
 
             //override the constructor function
@@ -47,31 +55,7 @@ define(["jquery", "underscore", "backbone", "js/utils/handle_iframe_binding"],
                 // this element, e.g. clicking on the element of a child view container in a parent.
                 event.stopPropagation();
                 event.preventDefault();
-                target.closest('.expand-collapse').toggleClass('expand').toggleClass('collapse');
-                target.closest('.is-collapsible, .window').toggleClass('collapsed');
-                target.closest('.is-collapsible').children('article').slideToggle();
-            },
-
-            showLoadingIndicator: function() {
-                $('.ui-loading').show();
-            },
-
-            hideLoadingIndicator: function() {
-                $('.ui-loading').hide();
-            },
-
-            /**
-             * Disables a given element when a given operation is running.
-             * @param {jQuery} element: the element to be disabled.
-             * @param operation: the operation during whose duration the
-             * element should be disabled. The operation should return
-             * a jquery promise.
-             */
-            disableElementWhileRunning: function(element, operation) {
-                element.addClass("is-disabled");
-                operation().always(function() {
-                    element.removeClass("is-disabled");
-                });
+                ViewUtils.toggleExpandCollapse(target, this.options.collapsedClass);
             },
 
             /**
@@ -80,12 +64,7 @@ define(["jquery", "underscore", "backbone", "js/utils/handle_iframe_binding"],
              * @returns The loaded template.
              */
             loadTemplate: function(name) {
-                var templateSelector = "#" + name + "-tpl",
-                    templateText = $(templateSelector).text();
-                if (!templateText) {
-                    console.error("Failed to load " + name + " template");
-                }
-                return _.template(templateText);
+                return TemplateUtils.loadTemplate(name);
             }
         });
 

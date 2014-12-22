@@ -1,21 +1,26 @@
 # -*- coding: utf-8 -*-
 # disable missing docstring
-# pylint: disable=C0111
+# pylint: disable=missing-docstring
 
 import requests
 from lettuce import world, step
-from nose.tools import assert_true, assert_equal, assert_in, assert_not_equal # pylint: disable=E0611
+from nose.tools import assert_true, assert_equal, assert_in, assert_not_equal  # pylint: disable=no-name-in-module
 from terrain.steps import reload_the_page
 from django.conf import settings
 from common import upload_file, attach_file
 
 TEST_ROOT = settings.COMMON_TEST_DATA_ROOT
 
+DISPLAY_NAME = "Component Display Name"
 NATIVE_LANGUAGES = {lang: label for lang, label in settings.LANGUAGES if len(lang) == 2}
 LANGUAGES = {
     lang: NATIVE_LANGUAGES.get(lang, display)
     for lang, display in settings.ALL_LANGUAGES
 }
+
+LANGUAGES.update({
+    'table': 'Table of Contents'
+})
 
 TRANSLATION_BUTTONS = {
     'add': '.metadata-video-translations .create-action',
@@ -76,7 +81,7 @@ def success_upload_file(filename):
 
 
 def get_translations_container():
-    return world.browser.find_by_xpath('//label[text()="Transcript Translations"]/following-sibling::div')
+    return world.browser.find_by_xpath('//label[text()="Transcript Languages"]/following-sibling::div')
 
 
 def get_setting_container(lang_code):
@@ -114,7 +119,7 @@ def set_show_captions(step, setting):
 
     world.edit_component()
     world.select_editor_tab('Advanced')
-    world.browser.select('Transcript Display', setting)
+    world.browser.select('Show Transcript', setting)
     world.save_component()
 
 
@@ -136,25 +141,25 @@ def shows_captions(_step, show_captions):
 def correct_video_settings(_step):
     expected_entries = [
         # basic
-        ['Display Name', 'Video', False],
-        ['Video URL', 'http://youtu.be/OEoXaMPEzfM, , ', False],
+        [DISPLAY_NAME, 'Video', False],
+        ['Default Video URL', 'http://youtu.be/OEoXaMPEzfM, , ', False],
 
         # advanced
-        ['Display Name', 'Video', False],
-        ['Download Transcript', '', False],
-        ['End Time', '00:00:00', False],
-        ['Start Time', '00:00:00', False],
-        ['Transcript (primary)', '', False],
-        ['Transcript Display', 'True', False],
-        ['Transcript Download Allowed', 'False', False],
-        ['Transcript Translations', '', False],
+        [DISPLAY_NAME, 'Video', False],
+        ['Default Timed Transcript', '', False],
+        ['Download Transcript Allowed', 'False', False],
+        ['Downloadable Transcript URL', '', False],
+        ['Show Transcript', 'True', False],
+        ['Transcript Languages', '', False],
         ['Upload Handout', '', False],
         ['Video Download Allowed', 'False', False],
-        ['Video Sources', '', False],
-        ['Youtube ID', 'OEoXaMPEzfM', False],
-        ['Youtube ID for .75x speed', '', False],
-        ['Youtube ID for 1.25x speed', '', False],
-        ['Youtube ID for 1.5x speed', '', False]
+        ['Video File URLs', '', False],
+        ['Video Start Time', '00:00:00', False],
+        ['Video Stop Time', '00:00:00', False],
+        ['YouTube ID', 'OEoXaMPEzfM', False],
+        ['YouTube ID for .75x speed', '', False],
+        ['YouTube ID for 1.25x speed', '', False],
+        ['YouTube ID for 1.5x speed', '', False]
     ]
     world.verify_all_setting_entries(expected_entries)
 
@@ -167,9 +172,16 @@ def video_name_persisted(step):
     world.edit_component()
 
     world.verify_setting_entry(
-        world.get_setting_entry('Display Name'),
-        'Display Name', '3.4', True
+        world.get_setting_entry(DISPLAY_NAME),
+        DISPLAY_NAME, '3.4', True
     )
+
+
+@step('I can modify video display name')
+def i_can_modify_video_display_name(_step):
+    index = world.get_setting_entry_index(DISPLAY_NAME)
+    world.set_field_value(index, '3.4')
+    world.verify_setting_entry(world.get_setting_entry(DISPLAY_NAME), DISPLAY_NAME, '3.4', True)
 
 
 @step('I upload transcript file(?:s)?:$')
@@ -298,3 +310,11 @@ def i_see_correct_langs(_step, langs):
     for lang_code, label in translations.items():
         assert_true(any([i.text == label for i in items]))
         assert_true(any([i['data-lang-code'] == lang_code for i in items]))
+
+
+@step('video language with code "([^"]*)" at position "(\d+)"$')
+def i_see_lang_at_position(_step, code, position):
+    menu_name = 'language'
+    open_menu(menu_name)
+    item = world.css_find(VIDEO_MENUS[menu_name] + ' li')[int(position)]
+    assert_equal(item['data-lang-code'], code)
